@@ -633,5 +633,3 @@ Initial development stages:
 23. WhatsApp integration
 24. Testing
 25. Deployment
-
-The system will be developed with school data isolation and role based permissions as core architectural requirements rather than features added later.
