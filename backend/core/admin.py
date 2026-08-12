@@ -1,0 +1,48 @@
+from django.contrib import admin
+
+from .models import (
+    AcademicResult,
+    AcademicYear,
+    ClassSubject,
+    Fee,
+    FinancialLedgerEntry,
+    Notification,
+    Parent,
+    ParentStudent,
+    Payment,
+    Receipt,
+    ReportCard,
+    School,
+    SchoolAdministrator,
+    SchoolClass,
+    Student,
+    StudentEnrollment,
+    StudentFeeAssignment,
+    Subject,
+    Term,
+    User,
+)
+
+
+admin.site.register([
+    User,
+    School,
+    SchoolAdministrator,
+    Parent,
+    SchoolClass,
+    Student,
+    ParentStudent,
+    AcademicYear,
+    Term,
+    Subject,
+    ClassSubject,
+    StudentEnrollment,
+    Fee,
+    StudentFeeAssignment,
+    Payment,
+    FinancialLedgerEntry,
+    Receipt,
+    AcademicResult,
+    ReportCard,
+    Notification,
+])
