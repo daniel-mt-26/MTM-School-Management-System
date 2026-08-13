@@ -7,6 +7,9 @@ import CommunicationPage from './pages/CommunicationPage'
 import FinancePage from './pages/FinancePage'
 import ParentDashboard from './pages/ParentDashboard'
 import ParentsPage from './pages/ParentsPage'
+import ParentDetailPage from './pages/ParentDetailPage'
+import ParentFormPage from './pages/ParentFormPage'
+import AcademicRecordsPage from './pages/AcademicRecordsPage'
 import PlatformDashboard from './pages/PlatformDashboard'
 import SchoolDashboard from './pages/SchoolDashboard'
 import SchoolSettingsPage from './pages/SchoolSettingsPage'
@@ -31,7 +34,11 @@ function App() {
             <Route path="/school/students/:studentId" element={<StudentDetailPage />} />
             <Route path="/school/students/:studentId/edit" element={<StudentFormPage />} />
             <Route path="/school/parents" element={<ParentsPage />} />
+            <Route path="/school/parents/new" element={<ParentFormPage />} />
+            <Route path="/school/parents/:parentId" element={<ParentDetailPage />} />
+            <Route path="/school/parents/:parentId/edit" element={<ParentFormPage />} />
             <Route path="/school/academics" element={<AcademicsPage />} />
+            <Route path="/school/academics/:resource" element={<AcademicRecordsPage />} />
             <Route path="/school/finance" element={<FinancePage />} />
             <Route path="/school/communication" element={<CommunicationPage />} />
             <Route path="/school/settings" element={<SchoolSettingsPage />} />

@@ -40,6 +40,7 @@ class SchoolAdministrator(models.Model):
 
 
 class Parent(models.Model):
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="parents")
     user = models.OneToOneField(User, on_delete=models.PROTECT, related_name="parent_profile")
     phone_number = models.CharField(max_length=30)
     address = models.TextField(blank=True)
@@ -139,6 +140,10 @@ class ParentStudent(models.Model):
         ]
         indexes = [models.Index(fields=["parent", "student"])]
 
+    def clean(self):
+        if self.parent.school_id != self.student.school_id:
+            raise ValidationError("A parent and student must belong to the same school.")
+
 
 class Subject(models.Model):
     school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="subjects")
@@ -164,6 +169,46 @@ class ClassSubject(models.Model):
     def clean(self):
         if self.school_class.school_id != self.subject.school_id or self.school_class.school_id != self.academic_year.school_id:
             raise ValidationError("Class, subject, and academic year must belong to the same school.")
+
+
+class TimetableEntry(models.Model):
+    school_class = models.ForeignKey(SchoolClass, on_delete=models.PROTECT, related_name="timetable_entries")
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name="timetable_entries")
+    term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="timetable_entries")
+    day_of_week = models.CharField(max_length=20)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    subject = models.ForeignKey(Subject, on_delete=models.PROTECT, related_name="timetable_entries", null=True, blank=True)
+    label = models.CharField(max_length=100, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school_class", "academic_year", "term", "day_of_week", "start_time", "end_time"],
+                name="unique_timetable_class_period",
+            ),
+        ]
+        indexes = [models.Index(fields=["school_class", "academic_year", "term", "day_of_week"], name="timetable_class_period_idx")]
+        ordering = ["day_of_week", "start_time", "end_time"]
+
+    def clean(self):
+        if self.start_time >= self.end_time:
+            raise ValidationError({"end_time": "End time must be after start time."})
+        if self.school_class.school_id != self.academic_year.school_id:
+            raise ValidationError("Class and academic year must belong to the same school.")
+        if self.term.academic_year_id != self.academic_year_id:
+            raise ValidationError({"term": "Term must belong to the selected academic year."})
+        if self.subject_id:
+            if self.subject.school_id != self.school_class.school_id:
+                raise ValidationError({"subject": "Subject must belong to the class school."})
+            if not ClassSubject.objects.filter(
+                school_class=self.school_class,
+                subject=self.subject,
+                academic_year=self.academic_year,
+            ).exists():
+                raise ValidationError({"subject": "Subject must be assigned to this class for the selected academic year."})
+        elif not self.label.strip():
+            raise ValidationError({"label": "A label is required for a non-subject timetable entry."})
 
 
 class StudentEnrollment(models.Model):

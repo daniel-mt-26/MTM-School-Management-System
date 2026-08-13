@@ -1,5 +1,4 @@
-import SchoolSectionPage from './SchoolSectionPage'
+import { Link } from 'react-router-dom'
 
-export default function AcademicsPage() {
-  return <SchoolSectionPage title="Academics" description="Academic management will be available here." />
-}
+const sections = [['classes', 'Classes'], ['subjects', 'Subjects'], ['academic-years', 'Academic Years'], ['terms', 'Terms'], ['enrollments', 'Enrolments'], ['class-subjects', 'Class Subjects'], ['timetables', 'Timetables'], ['results', 'Results'], ['report-cards', 'Report Cards']]
+export default function AcademicsPage() { return <main className="student-page"><header className="student-page-header"><div><Link to="/school" className="dashboard-link">← Back to School Dashboard</Link><h1>Academics</h1></div></header><section className="dashboard-navigation">{sections.map(([path, label]) => <Link key={path} to={`/school/academics/${path}`} className="dashboard-card"><h2>{label}</h2><p>Manage school {label.toLowerCase()}.</p></Link>)}</section></main> }

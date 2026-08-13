@@ -44,8 +44,8 @@ class TenantIsolationTests(APITestCase):
 
         self.parent_a_user = self.make_user("parent-a", User.Role.PARENT)
         self.parent_b_user = self.make_user("parent-b", User.Role.PARENT)
-        self.parent_a = Parent.objects.create(user=self.parent_a_user, phone_number="300")
-        self.parent_b = Parent.objects.create(user=self.parent_b_user, phone_number="400")
+        self.parent_a = Parent.objects.create(school=self.school_a, user=self.parent_a_user, phone_number="300")
+        self.parent_b = Parent.objects.create(school=self.school_b, user=self.parent_b_user, phone_number="400")
 
         self.class_a, self.year_a, self.term_a = self.make_school_calendar(self.school_a, "A")
         self.class_b, self.year_b, self.term_b = self.make_school_calendar(self.school_b, "B")
@@ -532,15 +532,15 @@ class TenantIsolationTests(APITestCase):
                 status.HTTP_403_FORBIDDEN,
             )
 
-    def test_available_parent_list_is_tenant_scoped_and_excludes_unowned_parent(self):
+    def test_available_parent_list_is_tenant_scoped_and_includes_unlinked_owned_parent(self):
         unowned_user = self.make_user("unowned-parent", User.Role.PARENT)
-        Parent.objects.create(user=unowned_user, phone_number="500")
+        unlinked_parent = Parent.objects.create(school=self.school_a, user=unowned_user, phone_number="500")
         self.authenticate(self.admin_a)
 
         response = self.client.get("/api/school/available-parents/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual([item["id"] for item in response.data], [self.parent_a.id])
+        self.assertEqual([item["id"] for item in response.data], [self.parent_a.id, unlinked_parent.id])
 
     def test_school_admin_can_link_and_unlink_available_parent(self):
         second_student = self.make_student(self.class_a, "A-LINK", "Linked")
@@ -573,7 +573,7 @@ class TenantIsolationTests(APITestCase):
     def test_primary_contact_constraint_returns_clean_validation_error(self):
         self.parent_a.student_links.update(is_primary_contact=True)
         second_user = self.make_user("parent-a-second", User.Role.PARENT)
-        second_parent = Parent.objects.create(user=second_user, phone_number="501")
+        second_parent = Parent.objects.create(school=self.school_a, user=second_user, phone_number="501")
         ParentStudent.objects.create(parent=second_parent, student=self.make_student(self.class_a, "A-OWNER", "Owner"))
         self.authenticate(self.admin_a)
         response = self.client.post("/api/school/parent-links/", {
@@ -584,6 +584,65 @@ class TenantIsolationTests(APITestCase):
         }, format="json")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("is_primary_contact", response.data)
+
+    def test_parent_admin_crud_is_tenant_safe_and_password_is_hashed(self):
+        self.authenticate(self.admin_a)
+        response = self.client.post("/api/school/parents/", {
+            "username": "new-guardian", "first_name": "New", "last_name": "Guardian",
+            "email": "guardian@example.test", "phone_number": "777", "password": "Safe-pass-123!",
+            "children": [self.student_a.id], "school": self.school_b.id,
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        response = self.client.post("/api/school/parents/", {
+            "username": "new-guardian", "first_name": "New", "last_name": "Guardian",
+            "email": "guardian@example.test", "phone_number": "777", "password": "Safe-pass-123!",
+            "children": [self.student_a.id],
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        parent = Parent.objects.get(pk=response.data["id"])
+        self.assertEqual(parent.school, self.school_a)
+        self.assertTrue(parent.user.check_password("Safe-pass-123!"))
+        self.assertFalse(parent.user.password == "Safe-pass-123!")
+        self.assertEqual(self.client.get(f"/api/school/parents/{self.parent_b.id}/").status_code, status.HTTP_404_NOT_FOUND)
+
+        login = self.client.post("/api/auth/token/", {"username": "new-guardian", "password": "Safe-pass-123!"}, format="json")
+        self.assertEqual(login.status_code, status.HTTP_200_OK)
+
+    def test_parent_link_rejects_cross_school_student_and_parent_crud_roles(self):
+        self.authenticate(self.admin_a)
+        response = self.client.post("/api/school/parent-links/", {
+            "parent": self.parent_a.id, "student": self.student_b.id, "relationship": "Guardian",
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        for user in (self.parent_a_user, self.platform_admin):
+            self.authenticate(user)
+            self.assertEqual(self.client.get("/api/school/parents/").status_code, status.HTTP_403_FORBIDDEN)
+        self.client.force_authenticate(user=None)
+        self.assertEqual(self.client.get("/api/school/parents/").status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_timetable_is_class_year_term_scoped_and_rejects_overlaps(self):
+        from .models import TimetableEntry
+        ClassSubject.objects.create(school_class=self.class_a, subject=Subject.objects.create(school=self.school_a, name="English", code="ENG"), academic_year=self.year_a)
+        subject = self.class_a.class_subjects.first().subject
+        self.authenticate(self.admin_a)
+        payload = {"school_class": self.class_a.id, "academic_year": self.year_a.id, "term": self.term_a.id, "day_of_week": "Monday", "start_time": "08:00", "end_time": "08:40", "subject": subject.id}
+        response = self.client.post("/api/school/timetables/", payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(TimetableEntry.objects.filter(school_class=self.class_a).count(), 1)
+        overlap = self.client.post("/api/school/timetables/", {**payload, "start_time": "08:30", "end_time": "09:00", "label": ""}, format="json")
+        self.assertEqual(overlap.status_code, status.HTTP_400_BAD_REQUEST)
+        foreign = self.client.post("/api/school/timetables/", {**payload, "school_class": self.class_b.id}, format="json")
+        self.assertEqual(foreign.status_code, status.HTTP_400_BAD_REQUEST)
+        self.authenticate(self.parent_a_user)
+        self.assertEqual(
+            self.client.get(f"/api/parent/students/{self.student_a.id}/timetable/").status_code,
+            status.HTTP_200_OK,
+        )
+        self.assertEqual(
+            self.client.get(f"/api/parent/students/{self.student_b.id}/timetable/").status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
 
     def test_school_admin_cannot_use_other_school_fee_or_payment_ids(self):
         self.authenticate(self.admin_a)
@@ -610,6 +669,24 @@ class TenantIsolationTests(APITestCase):
             f"/api/school/notifications/{self.notification_b.id}/",
         ):
             self.assertEqual(self.client.get(url).status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_academic_result_list_has_navigation_labels_and_scoped_filters(self):
+        self.authenticate(self.admin_a)
+
+        response = self.client.get(f"/api/school/results/?academic_year={self.year_a.id}&school_class={self.class_a.id}")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id"] for item in response.data], [self.result_a.id])
+        item = response.data[0]
+        self.assertEqual(item["student_name"], "Alice Learner")
+        self.assertEqual(item["class_name"], self.class_a.name)
+        self.assertEqual(item["academic_year_name"], self.year_a.name)
+        self.assertEqual(item["term_name"], self.term_a.name)
+        self.assertEqual(item["subject_name"], "Mathematics A")
+
+        response = self.client.get(f"/api/school/results/?academic_year={self.year_b.id}")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, [])
 
     def test_parent_can_access_only_linked_children_and_private_records(self):
         self.authenticate(self.parent_a_user)

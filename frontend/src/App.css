@@ -280,7 +280,7 @@ button:disabled { cursor: wait; opacity: 0.7; }
 .student-page-header p { margin: 5px 0 0; color: #6b7280; }
 .primary-link { padding: 11px 16px; border-radius: 7px; background: #2457a5; color: #fff; font-weight: 700; text-decoration: none; }
 .student-filters { display: grid; grid-template-columns: minmax(220px, 1fr) 220px 180px; gap: 12px; width: min(100%, 1100px); margin: 0 auto 18px; }
-.student-filters input, .student-filters select, .student-form input, .student-form select, .parent-link-form input, .parent-link-form select { box-sizing: border-box; width: 100%; padding: 11px 12px; border: 1px solid #aeb9ca; border-radius: 6px; background: #fff; font: inherit; }
+.student-filters input, .student-filters select, .student-form input, .student-form select, .student-form textarea, .parent-link-form input, .parent-link-form select, .academic-filters select { box-sizing: border-box; width: 100%; padding: 11px 12px; border: 1px solid #aeb9ca; border-radius: 6px; background: #fff; font: inherit; }
 .student-table-wrap, .student-state, .profile-section, .student-form { box-sizing: border-box; width: min(100%, 1100px); margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; }
 .student-state { padding: 40px; color: #6b7280; text-align: center; }
 .student-table-wrap { overflow-x: auto; }
@@ -311,6 +311,18 @@ button:disabled { cursor: wait; opacity: 0.7; }
 .text-button { margin: 0; padding: 6px; background: transparent; color: #a21717; font-weight: 600; }
 .parent-link-form { display: grid; grid-template-columns: 2fr 1fr auto auto; align-items: center; gap: 10px; margin-top: 20px; padding-top: 20px; border-top: 1px solid #eef1f5; }
 .parent-link-form button { margin: 0; }
+.parent-search { box-sizing: border-box; display: block; width: min(100%, 1100px); margin: 0 auto 18px; padding: 11px 12px; border: 1px solid #aeb9ca; border-radius: 6px; font: inherit; }
+.empty-cell { padding: 30px !important; color: #6b7280; text-align: center !important; }
+.academic-filters { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 12px; width: min(100%, 1100px); margin: 0 auto 18px; }
+.academic-filters label { display: grid; gap: 6px; color: #374151; font-size: 13px; font-weight: 600; }
+.academic-form { margin-bottom: 20px; }
+.academic-form h2 { margin: 0; font-size: 18px; }
+.inline-button { margin: 0 8px 0 0; padding: 6px 9px; font-size: 13px; }
+.timetable-cell { display: grid; gap: 5px; min-width: 130px; }
+.timetable-cell span { color: #6b7280; font-size: 12px; }
+.timetable-cell .inline-button, .timetable-cell .text-button { justify-self: start; }
+.timetable-selector { display: grid; max-width: 420px; gap: 7px; font-weight: 600; }
+.timetable-selector select { box-sizing: border-box; width: 100%; padding: 11px 12px; border: 1px solid #aeb9ca; border-radius: 6px; background: #fff; font: inherit; }
 
 @media (max-width: 800px) {
   .school-header {
@@ -335,5 +347,5 @@ button:disabled { cursor: wait; opacity: 0.7; }
 
   .student-page { padding: 24px 16px; }
   .student-page-header { align-items: flex-start; }
-  .student-filters, .form-columns, .detail-grid, .parent-link-form { grid-template-columns: 1fr; }
+  .student-filters, .form-columns, .detail-grid, .parent-link-form, .academic-filters { grid-template-columns: 1fr; }
 }

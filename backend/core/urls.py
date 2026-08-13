@@ -12,6 +12,8 @@ from .views import (
     FinancialLedgerEntryViewSet,
     NotificationViewSet,
     ParentAcademicResultViewSet,
+    ParentStudentTimetableView,
+    ParentViewSet,
     ParentPaymentViewSet,
     ParentReceiptViewSet,
     ParentReportCardViewSet,
@@ -29,12 +31,14 @@ from .views import (
     StudentViewSet,
     SubjectViewSet,
     TermViewSet,
+    TimetableEntryViewSet,
 )
 
 router = DefaultRouter()
 router.register("platform/schools", PlatformSchoolViewSet, basename="platform-school")
 router.register("school/classes", SchoolClassViewSet, basename="school-class")
 router.register("school/students", StudentViewSet, basename="school-student")
+router.register("school/parents", ParentViewSet, basename="school-parent")
 router.register("school/academic-years", AcademicYearViewSet, basename="school-academic-year")
 router.register("school/terms", TermViewSet, basename="school-term")
 router.register("school/subjects", SubjectViewSet, basename="school-subject")
@@ -49,6 +53,7 @@ router.register("school/results", AcademicResultViewSet, basename="school-result
 router.register("school/report-cards", ReportCardViewSet, basename="school-report-card")
 router.register("school/notifications", NotificationViewSet, basename="school-notification")
 router.register("school/parent-links", SchoolParentStudentViewSet, basename="school-parent-link")
+router.register("school/timetables", TimetableEntryViewSet, basename="school-timetable")
 router.register("parent/students", ParentStudentViewSet, basename="parent-student")
 router.register("parent/payments", ParentPaymentViewSet, basename="parent-payment")
 router.register("parent/receipts", ParentReceiptViewSet, basename="parent-receipt")
@@ -62,5 +67,6 @@ urlpatterns = [
     path("school/profile/", SchoolProfileView.as_view(), name="school-profile"),
     path("school/search/", SchoolSearchView.as_view(), name="school-search"),
     path("school/available-parents/", AvailableParentView.as_view(), name="school-available-parents"),
+    path("parent/students/<int:student_id>/timetable/", ParentStudentTimetableView.as_view(), name="parent-student-timetable"),
     path("", include(router.urls)),
 ]

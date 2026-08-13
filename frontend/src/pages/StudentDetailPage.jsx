@@ -70,7 +70,7 @@ function StudentDetailPage() {
       </header>
 
       <section className="profile-section"><h2>Student Details</h2><dl className="detail-grid">
-        <div><dt>Current Class</dt><dd>{student.class_name}</dd></div><div><dt>Status</dt><dd>{student.is_active ? 'Active' : 'Inactive'}</dd></div>
+        <div><dt>Current Class</dt><dd>{student.class_name}<br /><Link to="/school/academics/timetables" className="dashboard-link">View Class Timetable</Link></dd></div><div><dt>Status</dt><dd>{student.is_active ? 'Active' : 'Inactive'}</dd></div>
         <div><dt>Date of Birth</dt><dd>{student.date_of_birth}</dd></div><div><dt>Initial Enrollment</dt><dd>{student.enrolled_on}</dd></div>
       </dl></section>
 

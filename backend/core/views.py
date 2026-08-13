@@ -6,7 +6,7 @@ from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import MethodNotAllowed, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -30,6 +30,7 @@ from .models import (
     StudentFeeAssignment,
     Subject,
     Term,
+    TimetableEntry,
 )
 from .permissions import IsParent, IsPlatformAdministrator, IsSchoolAdministrator
 from .serializers import (
@@ -42,6 +43,9 @@ from .serializers import (
     FinancialLedgerEntrySerializer,
     NotificationSerializer,
     ParentPaymentSerializer,
+    ParentDetailSerializer,
+    ParentListSerializer,
+    ParentWriteSerializer,
     ParentReceiptSerializer,
     ParentReportCardSerializer,
     ParentResultSerializer,
@@ -61,6 +65,7 @@ from .serializers import (
     StudentWriteSerializer,
     SubjectSerializer,
     TermSerializer,
+    TimetableEntrySerializer,
 )
 from .tenant import ParentScopedQuerysetMixin, SchoolScopedQuerysetMixin
 
@@ -111,7 +116,7 @@ class SchoolSearchView(APIView):
             .order_by("last_name", "first_name", "id")[: self.result_limit]
         )
         parents = (
-            Parent.objects.filter(student_links__student__school=school)
+            Parent.objects.filter(school=school)
             .filter(
                 Q(user__first_name__icontains=query)
                 | Q(user__last_name__icontains=query)
@@ -157,6 +162,12 @@ class SchoolClassViewSet(SchoolAdminViewSet):
 
     def perform_create(self, serializer):
         serializer.save(school=self.get_school())
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if query := self.request.query_params.get("q", "").strip():
+            queryset = queryset.filter(name__icontains=query)
+        return queryset.order_by("name", "id")
 
 
 class StudentViewSet(SchoolAdminViewSet):
@@ -262,7 +273,7 @@ class AvailableParentView(APIView):
     def get(self, request):
         school = request.user.school_administrator.school
         query = request.query_params.get("q", "").strip()
-        parents = Parent.objects.filter(student_links__student__school=school)
+        parents = Parent.objects.filter(school=school)
         if query:
             parents = parents.filter(
                 Q(user__first_name__icontains=query)
@@ -274,6 +285,83 @@ class AvailableParentView(APIView):
         return Response(AvailableParentSerializer(parents, many=True).data)
 
 
+class ParentViewSet(SchoolAdminViewSet):
+    queryset = Parent.objects.all()
+    school_lookup = "school"
+
+    def get_queryset(self):
+        queryset = super().get_queryset().select_related("user").prefetch_related("student_links__student__school_class")
+        query = self.request.query_params.get("q", "").strip()
+        if query:
+            queryset = queryset.filter(
+                Q(user__first_name__icontains=query)
+                | Q(user__last_name__icontains=query)
+                | Q(user__username__icontains=query)
+                | Q(user__email__icontains=query)
+                | Q(phone_number__icontains=query)
+            )
+        return queryset
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ParentListSerializer
+        if self.action == "retrieve":
+            return ParentDetailSerializer
+        return ParentWriteSerializer
+
+    @transaction.atomic
+    def perform_create(self, serializer):
+        serializer.save()
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        parent = Parent.objects.select_related("user").prefetch_related("student_links__student__school_class").get(pk=serializer.instance.pk)
+        return Response(ParentDetailSerializer(parent).data, status=201)
+
+    def update(self, request, *args, **kwargs):
+        parent = self.get_object()
+        serializer = self.get_serializer(parent, data=request.data, partial=kwargs.pop("partial", False))
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        parent.refresh_from_db()
+        return Response(ParentDetailSerializer(parent).data)
+
+    def destroy(self, request, *args, **kwargs):
+        raise MethodNotAllowed("DELETE")
+
+
+class TimetableEntryViewSet(SchoolAdminViewSet):
+    queryset = TimetableEntry.objects.all()
+    serializer_class = TimetableEntrySerializer
+    school_lookup = "school_class__school"
+
+    def get_queryset(self):
+        queryset = super().get_queryset().select_related("school_class", "academic_year", "term", "subject")
+        for name in ("school_class", "academic_year", "term"):
+            if value := self.request.query_params.get(name):
+                queryset = queryset.filter(**{f"{name}_id": value})
+        return queryset.order_by("day_of_week", "start_time", "end_time", "id")
+
+
+class ParentStudentTimetableView(APIView):
+    permission_classes = [IsParent]
+
+    def get(self, request, student_id):
+        student = get_object_or_404(
+            Student.objects.select_related("school_class"),
+            pk=student_id,
+            parent_links__parent=request.user.parent_profile,
+        )
+        entries = TimetableEntry.objects.filter(school_class=student.school_class)
+        if year := request.query_params.get("academic_year"):
+            entries = entries.filter(academic_year_id=year)
+        if term := request.query_params.get("term"):
+            entries = entries.filter(term_id=term)
+        return Response(TimetableEntrySerializer(entries, many=True, context={"school": student.school}).data)
+
+
 class AcademicYearViewSet(SchoolAdminViewSet):
     queryset = AcademicYear.objects.all()
     serializer_class = AcademicYearSerializer
@@ -282,11 +370,20 @@ class AcademicYearViewSet(SchoolAdminViewSet):
     def perform_create(self, serializer):
         serializer.save(school=self.get_school())
 
+    def get_queryset(self):
+        return super().get_queryset().order_by("-is_current", "-start_date", "id")
+
 
 class TermViewSet(SchoolAdminViewSet):
     queryset = Term.objects.all()
     serializer_class = TermSerializer
     school_lookup = "academic_year__school"
+
+    def get_queryset(self):
+        queryset = super().get_queryset().select_related("academic_year")
+        if year := self.request.query_params.get("academic_year"):
+            queryset = queryset.filter(academic_year_id=year)
+        return queryset.order_by("academic_year__start_date", "sequence", "id")
 
 
 class SubjectViewSet(SchoolAdminViewSet):
@@ -297,17 +394,40 @@ class SubjectViewSet(SchoolAdminViewSet):
     def perform_create(self, serializer):
         serializer.save(school=self.get_school())
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if query := self.request.query_params.get("q", "").strip():
+            queryset = queryset.filter(Q(name__icontains=query) | Q(code__icontains=query))
+        return queryset.order_by("name", "id")
+
 
 class ClassSubjectViewSet(SchoolAdminViewSet):
     queryset = ClassSubject.objects.all()
     serializer_class = ClassSubjectSerializer
     school_lookup = "school_class__school"
 
+    def get_queryset(self):
+        queryset = super().get_queryset().select_related("school_class", "subject", "academic_year")
+        for name in ("school_class", "subject", "academic_year"):
+            if value := self.request.query_params.get(name):
+                queryset = queryset.filter(**{f"{name}_id": value})
+        return queryset.order_by("academic_year__start_date", "school_class__name", "subject__name", "id")
+
 
 class StudentEnrollmentViewSet(SchoolAdminViewSet):
     queryset = StudentEnrollment.objects.all()
     serializer_class = StudentEnrollmentSerializer
     school_lookup = "school_class__school"
+
+    def get_queryset(self):
+        queryset = super().get_queryset().select_related("student", "school_class", "academic_year")
+        for name in ("student", "school_class", "academic_year"):
+            if value := self.request.query_params.get(name):
+                queryset = queryset.filter(**{f"{name}_id": value})
+        open_only = self.request.query_params.get("open", "").lower()
+        if open_only in {"true", "false"}:
+            queryset = queryset.filter(left_on__isnull=open_only == "true")
+        return queryset.order_by("-academic_year__start_date", "student__last_name", "student__first_name", "-enrolled_on", "id")
 
 
 class FeeViewSet(SchoolAdminViewSet):
@@ -354,6 +474,26 @@ class AcademicResultViewSet(SchoolAdminViewSet):
     def perform_create(self, serializer):
         serializer.save(recorded_by=self.request.user)
 
+    def get_queryset(self):
+        queryset = super().get_queryset().select_related(
+            "student_enrollment__student",
+            "student_enrollment__school_class",
+            "student_enrollment__academic_year",
+            "term",
+            "class_subject__subject",
+        )
+        filters = {
+            "academic_year": "student_enrollment__academic_year_id",
+            "term": "term_id",
+            "school_class": "student_enrollment__school_class_id",
+            "subject": "class_subject__subject_id",
+            "student": "student_enrollment__student_id",
+        }
+        for param, lookup in filters.items():
+            if value := self.request.query_params.get(param):
+                queryset = queryset.filter(**{lookup: value})
+        return queryset.order_by("student_enrollment__student__last_name", "student_enrollment__student__first_name", "class_subject__subject__name", "id")
+
 
 class ReportCardDownloadMixin:
     @action(detail=True, methods=["get"])
@@ -368,6 +508,22 @@ class ReportCardViewSet(ReportCardDownloadMixin, SchoolAdminViewSet):
     queryset = ReportCard.objects.all()
     serializer_class = ReportCardSerializer
     school_lookup = "student_enrollment__school_class__school"
+
+    def get_queryset(self):
+        queryset = super().get_queryset().select_related(
+            "student_enrollment__student",
+            "student_enrollment__school_class",
+            "student_enrollment__academic_year",
+            "term",
+        )
+        for param, lookup in {
+            "student": "student_enrollment__student_id",
+            "academic_year": "student_enrollment__academic_year_id",
+            "term": "term_id",
+        }.items():
+            if value := self.request.query_params.get(param):
+                queryset = queryset.filter(**{lookup: value})
+        return queryset.order_by("-generated_at", "id")
 
 
 class NotificationViewSet(SchoolAdminViewSet):

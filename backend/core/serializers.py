@@ -1,6 +1,7 @@
 from copy import copy
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
 from .models import (
@@ -22,6 +23,7 @@ from .models import (
     StudentFeeAssignment,
     Subject,
     Term,
+    TimetableEntry,
     User,
 )
 
@@ -207,7 +209,177 @@ class AvailableParentSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class ParentListSerializer(serializers.ModelSerializer):
+    display_name = serializers.SerializerMethodField()
+    username = serializers.CharField(source="user.username", read_only=True)
+    email = serializers.EmailField(source="user.email", read_only=True)
+    phone = serializers.CharField(source="phone_number", read_only=True)
+    child_count = serializers.SerializerMethodField()
+
+    def get_display_name(self, parent):
+        return parent.user.get_full_name() or parent.user.username
+
+    def get_child_count(self, parent):
+        return len(parent.student_links.all())
+
+    class Meta:
+        model = Parent
+        fields = ["id", "display_name", "username", "email", "phone", "child_count"]
+        read_only_fields = fields
+
+
+class ParentChildSerializer(serializers.ModelSerializer):
+    display_name = serializers.SerializerMethodField()
+    admission_number = serializers.CharField(source="student.admission_number", read_only=True)
+    class_name = serializers.CharField(source="student.school_class.name", read_only=True)
+
+    def get_display_name(self, link):
+        return f"{link.student.first_name} {link.student.last_name}".strip()
+
+    class Meta:
+        model = ParentStudent
+        fields = ["id", "student", "display_name", "admission_number", "class_name", "relationship", "is_primary_contact"]
+        read_only_fields = fields
+
+
+class ParentDetailSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source="user.username", read_only=True)
+    email = serializers.EmailField(source="user.email", read_only=True)
+    first_name = serializers.CharField(source="user.first_name", read_only=True)
+    last_name = serializers.CharField(source="user.last_name", read_only=True)
+    children = ParentChildSerializer(source="student_links", many=True, read_only=True)
+
+    class Meta:
+        model = Parent
+        fields = ["id", "username", "email", "first_name", "last_name", "phone_number", "address", "children"]
+        read_only_fields = fields
+
+
+class ParentWriteSerializer(serializers.Serializer):
+    username = serializers.CharField(required=False)
+    first_name = serializers.CharField(required=False, allow_blank=True)
+    last_name = serializers.CharField(required=False, allow_blank=True)
+    email = serializers.EmailField(required=False, allow_blank=True)
+    phone_number = serializers.CharField(required=False)
+    address = serializers.CharField(required=False, allow_blank=True)
+    password = serializers.CharField(write_only=True, required=False, trim_whitespace=False)
+    children = serializers.ListField(child=serializers.IntegerField(), required=False, write_only=True)
+
+    def validate(self, attrs):
+        if "school" in self.initial_data or "school_id" in self.initial_data:
+            raise serializers.ValidationError({"school": "School ownership is controlled by the authenticated account."})
+        if self.instance is None:
+            for field in ("username", "password", "phone_number"):
+                if not attrs.get(field):
+                    raise serializers.ValidationError({field: "This field is required."})
+            if User.objects.filter(username=attrs["username"]).exists():
+                raise serializers.ValidationError({"username": "This username is already in use."})
+        if "password" in attrs:
+            candidate = self.instance.user if self.instance else User(username=attrs.get("username", ""))
+            try:
+                validate_password(attrs["password"], candidate)
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError({"password": exc.messages}) from exc
+        school = self.context["school"]
+        child_ids = attrs.get("children", [])
+        if child_ids:
+            children = Student.objects.filter(school=school, id__in=child_ids)
+            if children.count() != len(set(child_ids)):
+                raise serializers.ValidationError({"children": "Every child must belong to your school."})
+        return attrs
+
+    def create(self, validated_data):
+        children = validated_data.pop("children", [])
+        password = validated_data.pop("password")
+        school = self.context["school"]
+        user_fields = {key: validated_data.pop(key, "") for key in ("username", "first_name", "last_name", "email")}
+        user = User(**user_fields, role=User.Role.PARENT)
+        user.set_password(password)
+        user.full_clean()
+        user.save()
+        parent = Parent.objects.create(school=school, user=user, **validated_data)
+        for child in Student.objects.filter(school=school, id__in=children):
+            ParentStudent.objects.create(parent=parent, student=child)
+        return parent
+
+    def update(self, instance, validated_data):
+        validated_data.pop("children", None)
+        password = validated_data.pop("password", None)
+        user_changes = {key: validated_data.pop(key) for key in ("username", "first_name", "last_name", "email") if key in validated_data}
+        for key, value in user_changes.items():
+            setattr(instance.user, key, value)
+        if password:
+            instance.user.set_password(password)
+        if user_changes or password:
+            instance.user.full_clean()
+            instance.user.save()
+        for key, value in validated_data.items():
+            setattr(instance, key, value)
+        instance.full_clean()
+        instance.save()
+        return instance
+
+
+class TimetableEntrySerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    scoped_related_fields = {
+        "school_class": (SchoolClass, "school"),
+        "academic_year": (AcademicYear, "school"),
+        "term": (Term, "academic_year__school"),
+        "subject": (Subject, "school"),
+    }
+    display_label = serializers.SerializerMethodField()
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+    academic_year_name = serializers.CharField(source="academic_year.name", read_only=True)
+    term_name = serializers.CharField(source="term.name", read_only=True)
+    subject_name = serializers.CharField(source="subject.name", read_only=True)
+
+    def get_display_label(self, entry):
+        return entry.label or (entry.subject.name if entry.subject_id else "")
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        candidate = copy(self.instance) if self.instance else TimetableEntry()
+        for key, value in attrs.items():
+            setattr(candidate, key, value)
+        try:
+            candidate.clean()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(getattr(exc, "message_dict", {"non_field_errors": exc.messages})) from exc
+        overlaps = TimetableEntry.objects.filter(
+            school_class=candidate.school_class,
+            academic_year=candidate.academic_year,
+            term=candidate.term,
+            day_of_week=candidate.day_of_week,
+            start_time__lt=candidate.end_time,
+            end_time__gt=candidate.start_time,
+        )
+        if self.instance:
+            overlaps = overlaps.exclude(pk=self.instance.pk)
+        if overlaps.exists():
+            raise serializers.ValidationError({"start_time": "This period overlaps an existing timetable entry."})
+        return attrs
+
+    class Meta:
+        model = TimetableEntry
+        fields = ["id", "school_class", "class_name", "academic_year", "academic_year_name", "term", "term_name", "day_of_week", "start_time", "end_time", "subject", "subject_name", "label", "display_label"]
+        read_only_fields = ["id", "display_label"]
+
+
 class AcademicYearSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        start_date = attrs.get("start_date", getattr(self.instance, "start_date", None))
+        end_date = attrs.get("end_date", getattr(self.instance, "end_date", None))
+        if start_date and end_date and end_date <= start_date:
+            raise serializers.ValidationError({"end_date": "End date must be after start date."})
+        if attrs.get("is_current", getattr(self.instance, "is_current", False)):
+            current = AcademicYear.objects.filter(school=self.get_school(), is_current=True)
+            if self.instance:
+                current = current.exclude(pk=self.instance.pk)
+            if current.exists():
+                raise serializers.ValidationError({"is_current": "Only one academic year can be current for this school."})
+        return attrs
+
     class Meta:
         model = AcademicYear
         fields = ["id", "name", "start_date", "end_date", "is_current"]
@@ -216,10 +388,19 @@ class AcademicYearSerializer(SchoolScopedSerializerMixin, serializers.ModelSeria
 
 class TermSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
     scoped_related_fields = {"academic_year": (AcademicYear, "school")}
+    academic_year_name = serializers.CharField(source="academic_year.name", read_only=True)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        start_date = attrs.get("start_date", getattr(self.instance, "start_date", None))
+        end_date = attrs.get("end_date", getattr(self.instance, "end_date", None))
+        if start_date and end_date and end_date <= start_date:
+            raise serializers.ValidationError({"end_date": "End date must be after start date."})
+        return attrs
 
     class Meta:
         model = Term
-        fields = ["id", "academic_year", "name", "sequence", "start_date", "end_date"]
+        fields = ["id", "academic_year", "academic_year_name", "name", "sequence", "start_date", "end_date"]
         read_only_fields = ["id"]
 
 
@@ -236,10 +417,13 @@ class ClassSubjectSerializer(SchoolScopedSerializerMixin, serializers.ModelSeria
         "subject": (Subject, "school"),
         "academic_year": (AcademicYear, "school"),
     }
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+    subject_name = serializers.CharField(source="subject.name", read_only=True)
+    academic_year_name = serializers.CharField(source="academic_year.name", read_only=True)
 
     class Meta:
         model = ClassSubject
-        fields = ["id", "school_class", "subject", "academic_year"]
+        fields = ["id", "school_class", "class_name", "subject", "subject_name", "academic_year", "academic_year_name"]
         read_only_fields = ["id"]
 
 
@@ -249,10 +433,17 @@ class StudentEnrollmentSerializer(SchoolScopedSerializerMixin, serializers.Model
         "school_class": (SchoolClass, "school"),
         "academic_year": (AcademicYear, "school"),
     }
+    student_name = serializers.SerializerMethodField()
+    admission_number = serializers.CharField(source="student.admission_number", read_only=True)
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+    academic_year_name = serializers.CharField(source="academic_year.name", read_only=True)
+
+    def get_student_name(self, enrollment):
+        return f"{enrollment.student.first_name} {enrollment.student.last_name}".strip()
 
     class Meta:
         model = StudentEnrollment
-        fields = ["id", "student", "school_class", "academic_year", "enrolled_on", "left_on"]
+        fields = ["id", "student", "student_name", "admission_number", "school_class", "class_name", "academic_year", "academic_year_name", "enrolled_on", "left_on"]
         read_only_fields = ["id"]
 
 
@@ -318,10 +509,24 @@ class AcademicResultSerializer(SchoolScopedSerializerMixin, serializers.ModelSer
         "term": (Term, "academic_year__school"),
         "class_subject": (ClassSubject, "school_class__school"),
     }
+    student_name = serializers.SerializerMethodField()
+    admission_number = serializers.CharField(source="student_enrollment.student.admission_number", read_only=True)
+    class_name = serializers.CharField(source="student_enrollment.school_class.name", read_only=True)
+    academic_year_name = serializers.CharField(source="student_enrollment.academic_year.name", read_only=True)
+    term_name = serializers.CharField(source="term.name", read_only=True)
+    subject_name = serializers.CharField(source="class_subject.subject.name", read_only=True)
+    percentage = serializers.SerializerMethodField()
+
+    def get_student_name(self, result):
+        student = result.student_enrollment.student
+        return f"{student.first_name} {student.last_name}".strip()
+
+    def get_percentage(self, result):
+        return round((result.score / result.maximum_score) * 100, 2)
 
     class Meta:
         model = AcademicResult
-        fields = ["id", "student_enrollment", "term", "class_subject", "score", "maximum_score", "comment", "recorded_by", "recorded_at"]
+        fields = ["id", "student_enrollment", "student_name", "admission_number", "class_name", "academic_year_name", "term", "term_name", "class_subject", "subject_name", "score", "maximum_score", "percentage", "comment", "recorded_by", "recorded_at"]
         read_only_fields = ["id", "recorded_by", "recorded_at"]
 
 
@@ -330,10 +535,19 @@ class ReportCardSerializer(SchoolScopedSerializerMixin, serializers.ModelSeriali
         "student_enrollment": (StudentEnrollment, "school_class__school"),
         "term": (Term, "academic_year__school"),
     }
+    student_name = serializers.SerializerMethodField()
+    admission_number = serializers.CharField(source="student_enrollment.student.admission_number", read_only=True)
+    class_name = serializers.CharField(source="student_enrollment.school_class.name", read_only=True)
+    academic_year_name = serializers.CharField(source="student_enrollment.academic_year.name", read_only=True)
+    term_name = serializers.CharField(source="term.name", read_only=True)
+
+    def get_student_name(self, report_card):
+        student = report_card.student_enrollment.student
+        return f"{student.first_name} {student.last_name}".strip()
 
     class Meta:
         model = ReportCard
-        fields = ["id", "student_enrollment", "term", "generated_at", "file"]
+        fields = ["id", "student_enrollment", "student_name", "admission_number", "class_name", "academic_year_name", "term", "term_name", "generated_at", "file"]
         read_only_fields = ["id", "generated_at"]
 
 
@@ -347,7 +561,7 @@ class NotificationSerializer(SchoolScopedSerializerMixin, serializers.ModelSeria
 class SchoolParentStudentSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
     scoped_related_fields = {
         "student": (Student, "school"),
-        "parent": (Parent, "student_links__student__school"),
+        "parent": (Parent, "school"),
     }
 
     def get_fields(self):
@@ -357,6 +571,10 @@ class SchoolParentStudentSerializer(SchoolScopedSerializerMixin, serializers.Mod
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
+        parent = attrs.get("parent", getattr(self.instance, "parent", None))
+        student = attrs.get("student", getattr(self.instance, "student", None))
+        if parent and student and parent.school_id != student.school_id:
+            raise serializers.ValidationError({"parent": "Parent and student must belong to the same school."})
         if attrs.get("is_primary_contact", getattr(self.instance, "is_primary_contact", False)):
             student = attrs.get("student", getattr(self.instance, "student", None))
             existing = ParentStudent.objects.filter(student=student, is_primary_contact=True)
@@ -373,9 +591,15 @@ class SchoolParentStudentSerializer(SchoolScopedSerializerMixin, serializers.Mod
 
 
 class ParentStudentSerializer(serializers.ModelSerializer):
+    display_name = serializers.SerializerMethodField()
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+
+    def get_display_name(self, student):
+        return f"{student.first_name} {student.last_name}".strip()
+
     class Meta:
         model = Student
-        fields = ["id", "admission_number", "first_name", "last_name", "date_of_birth", "school_class", "is_active"]
+        fields = ["id", "admission_number", "first_name", "last_name", "display_name", "date_of_birth", "school_class", "class_name", "is_active"]
         read_only_fields = fields
 
 
