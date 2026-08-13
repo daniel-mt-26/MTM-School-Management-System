@@ -43,6 +43,7 @@ from .serializers import (
     ReportCardSerializer,
     SchoolClassSerializer,
     SchoolParentStudentSerializer,
+    SchoolProfileSerializer,
     SchoolSerializer,
     StudentEnrollmentSerializer,
     StudentFeeAssignmentSerializer,
@@ -55,6 +56,14 @@ from .tenant import ParentScopedQuerysetMixin, SchoolScopedQuerysetMixin
 
 class SchoolAdminViewSet(SchoolScopedQuerysetMixin, viewsets.ModelViewSet):
     permission_classes = [IsSchoolAdministrator]
+
+
+class SchoolProfileView(APIView):
+    permission_classes = [IsSchoolAdministrator]
+
+    def get(self, request):
+        school = request.user.school_administrator.school
+        return Response(SchoolProfileSerializer(school, context={"request": request}).data)
 
 
 class SchoolClassViewSet(SchoolAdminViewSet):

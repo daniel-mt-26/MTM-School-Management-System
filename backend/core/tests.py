@@ -104,6 +104,60 @@ class TenantIsolationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual([item["id"] for item in response.data], [self.student_a.id])
 
+    def test_school_a_admin_receives_only_school_a_profile_with_logo_url(self):
+        self.school_a.address = "1 Alpha Road"
+        self.school_a.logo.name = "school_logos/school-a.png"
+        self.school_a.save(update_fields=["address", "logo"])
+        self.authenticate(self.admin_a)
+
+        response = self.client.get("/api/school/profile/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, {
+            "name": "School A",
+            "email": "a@example.test",
+            "phone": "100",
+            "address": "1 Alpha Road",
+            "logo": "http://testserver/media/school_logos/school-a.png",
+        })
+
+    def test_school_b_admin_receives_only_school_b_profile(self):
+        self.authenticate(self.admin_b)
+
+        response = self.client.get("/api/school/profile/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, {
+            "name": "School B",
+            "email": "b@example.test",
+            "phone": "200",
+            "address": "",
+            "logo": None,
+        })
+
+    def test_school_profile_does_not_accept_school_id(self):
+        self.authenticate(self.admin_a)
+
+        response = self.client.get("/api/school/profile/", {"school_id": self.school_b.id})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["name"], self.school_a.name)
+        self.assertEqual(
+            self.client.get(f"/api/school/{self.school_b.id}/profile/").status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+    def test_platform_admin_is_denied_school_profile(self):
+        self.authenticate(self.platform_admin)
+        self.assertEqual(self.client.get("/api/school/profile/").status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_parent_is_denied_school_profile(self):
+        self.authenticate(self.parent_a_user)
+        self.assertEqual(self.client.get("/api/school/profile/").status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_user_is_denied_school_profile(self):
+        self.assertEqual(self.client.get("/api/school/profile/").status_code, status.HTTP_401_UNAUTHORIZED)
+
     def test_school_admin_cannot_retrieve_update_or_delete_other_school_student(self):
         self.authenticate(self.admin_a)
         detail_url = f"/api/school/students/{self.student_b.id}/"

@@ -21,6 +21,7 @@ class School(models.Model):
     email = models.EmailField(unique=True)
     phone_number = models.CharField(max_length=30)
     address = models.TextField(blank=True)
+    logo = models.ImageField(upload_to="school_logos/", blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -302,4 +303,3 @@ class Notification(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=["school", "is_read", "created_at"])]
-

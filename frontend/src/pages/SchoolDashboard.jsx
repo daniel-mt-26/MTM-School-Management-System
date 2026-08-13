@@ -1,16 +1,63 @@
-import { Link } from "react-router-dom";
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+
+import { getSchoolProfile } from '../api/school'
+
+function getInitials(name) {
+  return name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((word) => word[0])
+    .join('')
+    .toUpperCase() || 'S'
+}
 
 function SchoolDashboard() {
+  const [school, setSchool] = useState(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+
+    getSchoolProfile()
+      .then((profile) => {
+        if (active) setSchool(profile)
+      })
+      .catch(() => {
+        if (active) setError('We could not load your school profile. Please try again.')
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  if (error) {
+    return (
+      <main className="school-profile-state" role="alert">
+        <p>{error}</p>
+        <button type="button" onClick={() => window.location.reload()}>Try again</button>
+      </main>
+    )
+  }
+
+  if (!school) {
+    return <main className="school-profile-state" aria-live="polite">Loading school profile…</main>
+  }
+
   return (
     <div className="school-dashboard">
       <header className="school-header">
         <div className="school-identity">
-          <div className="school-logo">
-            MTM
-          </div>
+          {school.logo ? (
+            <img className="school-logo" src={school.logo} alt={`${school.name} logo`} />
+          ) : (
+            <div className="school-logo" aria-hidden="true">{getInitials(school.name)}</div>
+          )}
 
           <div>
-            <h1>MTM Primary School</h1>
+            <h1>{school.name}</h1>
             <p>School Management System</p>
           </div>
         </div>

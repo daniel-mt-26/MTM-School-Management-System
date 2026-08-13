@@ -1,0 +1,421 @@
+Watching for file changes with StatReloader
+Unauthorized: /api/auth/me/
+[13/Aug/2026 21:15:15] "GET /api/auth/me/ HTTP/1.1" 401 58
+[13/Aug/2026 21:15:16,104] - Broken pipe from ('127.0.0.1', 53467)
+[13/Aug/2026 21:19:42] "OPTIONS /api/auth/token/ HTTP/1.1" 200 0
+[13/Aug/2026 21:19:49] "OPTIONS /api/auth/token/ HTTP/1.1" 200 0
+[13/Aug/2026 21:20:15] "OPTIONS /api/auth/token/ HTTP/1.1" 200 0
+[13/Aug/2026 21:20:15] "OPTIONS /api/auth/token/ HTTP/1.1" 200 0
+[13/Aug/2026 21:20:15,956] - Broken pipe from ('127.0.0.1', 56326)
+[13/Aug/2026 21:21:11] "OPTIONS /api/auth/token/ HTTP/1.1" 200 0
+[13/Aug/2026 21:21:13] "POST /api/auth/token/ HTTP/1.1" 200 489
+[13/Aug/2026 21:21:13] "OPTIONS /api/auth/me/ HTTP/1.1" 200 0
+[13/Aug/2026 21:21:13] "GET /api/auth/me/ HTTP/1.1" 200 99
+[13/Aug/2026 21:21:13] "OPTIONS /api/school/profile/ HTTP/1.1" 200 0
+[13/Aug/2026 21:21:13] "OPTIONS /api/school/profile/ HTTP/1.1" 200 0
+Internal Server Error: /api/school/profile/
+Traceback (most recent call last):
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 250, in __get__
+    rel_obj = self.field.get_cached_value(instance)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\mixins.py", line 21, in get_cached_value
+    return instance._state.fields_cache[self.cache_name]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+KeyError: 'school'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\psycopg\cursor.py", line 117, in execute
+    raise ex.with_traceback(None)
+psycopg.errors.UndefinedColumn: column core_school.logo does not exist
+LINE 1: ..._school"."phone_number", "core_school"."address", "core_scho...
+                                                             ^
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\core\handlers\exception.py", line 56, in inner
+    response = get_response(request)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\core\handlers\base.py", line 199, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\views\decorators\csrf.py", line 64, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\views\generic\base.py", line 105, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\rest_framework\views.py", line 526, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\rest_framework\views.py", line 474, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\rest_framework\views.py", line 485, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\rest_framework\views.py", line 523, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\Users\HP\MTM-SMS\backend\core\views.py", line 65, in get
+    school = request.user.school_administrator.school
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 266, in __get__
+    instance._state.fetch_mode.fetch(self, instance)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fetch_modes.py", line 17, in fetch
+    fetcher.fetch_one(instance)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 279, in fetch_one
+    rel_obj = self.get_object(instance)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 231, in get_object
+    return qs.get(self.field.get_reverse_related_filter(instance))
+           ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\query.py", line 679, in get
+    num = len(clone)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\query.py", line 416, in __len__
+    self._fetch_all()
+    ~~~~~~~~~~~~~~~^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\query.py", line 2239, in _fetch_all
+    self._result_cache = list(self._iterable_class(self))
+                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\query.py", line 98, in __iter__
+    results = compiler.execute_sql(
+        chunked_fetch=self.chunked_fetch, chunk_size=self.chunk_size
+    )
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\sql\compiler.py", line 1624, in execute_sql
+    cursor.execute(sql, params)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 122, in execute
+    return super().execute(sql, params)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 79, in execute
+    return self._execute_with_wrappers(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        sql, params, many=False, executor=self._execute
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 92, in _execute_with_wrappers
+    return executor(sql, params, many, context)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 100, in _execute
+    with self.db.wrap_database_errors:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\utils.py", line 94, in __exit__
+    raise dj_exc_value.with_traceback(traceback) from exc_value
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\psycopg\cursor.py", line 117, in execute
+    raise ex.with_traceback(None)
+django.db.utils.ProgrammingError: column core_school.logo does not exist
+LINE 1: ..._school"."phone_number", "core_school"."address", "core_scho...
+                                                             ^
+[13/Aug/2026 21:21:14] "GET /api/school/profile/ HTTP/1.1" 500 190967
+Internal Server Error: /api/school/profile/
+Traceback (most recent call last):
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 250, in __get__
+    rel_obj = self.field.get_cached_value(instance)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\mixins.py", line 21, in get_cached_value
+    return instance._state.fields_cache[self.cache_name]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+KeyError: 'school'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\psycopg\cursor.py", line 117, in execute
+    raise ex.with_traceback(None)
+psycopg.errors.UndefinedColumn: column core_school.logo does not exist
+LINE 1: ..._school"."phone_number", "core_school"."address", "core_scho...
+                                                             ^
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\core\handlers\exception.py", line 56, in inner
+    response = get_response(request)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\core\handlers\base.py", line 199, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\views\decorators\csrf.py", line 64, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\views\generic\base.py", line 105, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\rest_framework\views.py", line 526, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\rest_framework\views.py", line 474, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\rest_framework\views.py", line 485, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\rest_framework\views.py", line 523, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\Users\HP\MTM-SMS\backend\core\views.py", line 65, in get
+    school = request.user.school_administrator.school
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 266, in __get__
+    instance._state.fetch_mode.fetch(self, instance)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fetch_modes.py", line 17, in fetch
+    fetcher.fetch_one(instance)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 279, in fetch_one
+    rel_obj = self.get_object(instance)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 231, in get_object
+    return qs.get(self.field.get_reverse_related_filter(instance))
+           ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\query.py", line 679, in get
+    num = len(clone)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\query.py", line 416, in __len__
+    self._fetch_all()
+    ~~~~~~~~~~~~~~~^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\query.py", line 2239, in _fetch_all
+    self._result_cache = list(self._iterable_class(self))
+                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\query.py", line 98, in __iter__
+    results = compiler.execute_sql(
+        chunked_fetch=self.chunked_fetch, chunk_size=self.chunk_size
+    )
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\sql\compiler.py", line 1624, in execute_sql
+    cursor.execute(sql, params)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 122, in execute
+    return super().execute(sql, params)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 79, in execute
+    return self._execute_with_wrappers(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        sql, params, many=False, executor=self._execute
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 92, in _execute_with_wrappers
+    return executor(sql, params, many, context)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 100, in _execute
+    with self.db.wrap_database_errors:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\utils.py", line 94, in __exit__
+    raise dj_exc_value.with_traceback(traceback) from exc_value
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\psycopg\cursor.py", line 117, in execute
+    raise ex.with_traceback(None)
+django.db.utils.ProgrammingError: column core_school.logo does not exist
+LINE 1: ..._school"."phone_number", "core_school"."address", "core_scho...
+                                                             ^
+[13/Aug/2026 21:21:14] "GET /api/school/profile/ HTTP/1.1" 500 190967
+[13/Aug/2026 21:21:22] "GET /api/auth/me/ HTTP/1.1" 200 99
+[13/Aug/2026 21:21:22] "GET /api/auth/me/ HTTP/1.1" 200 99
+Internal Server Error: /api/school/profile/
+Traceback (most recent call last):
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 250, in __get__
+    rel_obj = self.field.get_cached_value(instance)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\mixins.py", line 21, in get_cached_value
+    return instance._state.fields_cache[self.cache_name]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+KeyError: 'school'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\psycopg\cursor.py", line 117, in execute
+    raise ex.with_traceback(None)
+psycopg.errors.UndefinedColumn: column core_school.logo does not exist
+LINE 1: ..._school"."phone_number", "core_school"."address", "core_scho...
+                                                             ^
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\core\handlers\exception.py", line 56, in inner
+    response = get_response(request)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\core\handlers\base.py", line 199, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\views\decorators\csrf.py", line 64, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\views\generic\base.py", line 105, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\rest_framework\views.py", line 526, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\rest_framework\views.py", line 474, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\rest_framework\views.py", line 485, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\rest_framework\views.py", line 523, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\Users\HP\MTM-SMS\backend\core\views.py", line 65, in get
+    school = request.user.school_administrator.school
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 266, in __get__
+    instance._state.fetch_mode.fetch(self, instance)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fetch_modes.py", line 17, in fetch
+    fetcher.fetch_one(instance)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 279, in fetch_one
+    rel_obj = self.get_object(instance)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 231, in get_object
+    return qs.get(self.field.get_reverse_related_filter(instance))
+           ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\query.py", line 679, in get
+    num = len(clone)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\query.py", line 416, in __len__
+    self._fetch_all()
+    ~~~~~~~~~~~~~~~^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\query.py", line 2239, in _fetch_all
+    self._result_cache = list(self._iterable_class(self))
+                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\query.py", line 98, in __iter__
+    results = compiler.execute_sql(
+        chunked_fetch=self.chunked_fetch, chunk_size=self.chunk_size
+    )
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\sql\compiler.py", line 1624, in execute_sql
+    cursor.execute(sql, params)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 122, in execute
+    return super().execute(sql, params)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 79, in execute
+    return self._execute_with_wrappers(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        sql, params, many=False, executor=self._execute
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 92, in _execute_with_wrappers
+    return executor(sql, params, many, context)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 100, in _execute
+    with self.db.wrap_database_errors:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\utils.py", line 94, in __exit__
+    raise dj_exc_value.with_traceback(traceback) from exc_value
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\psycopg\cursor.py", line 117, in execute
+    raise ex.with_traceback(None)
+django.db.utils.ProgrammingError: column core_school.logo does not exist
+LINE 1: ..._school"."phone_number", "core_school"."address", "core_scho...
+                                                             ^
+[13/Aug/2026 21:21:22] "GET /api/school/profile/ HTTP/1.1" 500 190967
+Internal Server Error: /api/school/profile/
+Traceback (most recent call last):
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 250, in __get__
+    rel_obj = self.field.get_cached_value(instance)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\mixins.py", line 21, in get_cached_value
+    return instance._state.fields_cache[self.cache_name]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+KeyError: 'school'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\psycopg\cursor.py", line 117, in execute
+    raise ex.with_traceback(None)
+psycopg.errors.UndefinedColumn: column core_school.logo does not exist
+LINE 1: ..._school"."phone_number", "core_school"."address", "core_scho...
+                                                             ^
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\core\handlers\exception.py", line 56, in inner
+    response = get_response(request)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\core\handlers\base.py", line 199, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\views\decorators\csrf.py", line 64, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\views\generic\base.py", line 105, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\rest_framework\views.py", line 526, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\rest_framework\views.py", line 474, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\rest_framework\views.py", line 485, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\rest_framework\views.py", line 523, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\Users\HP\MTM-SMS\backend\core\views.py", line 65, in get
+    school = request.user.school_administrator.school
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 266, in __get__
+    instance._state.fetch_mode.fetch(self, instance)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fetch_modes.py", line 17, in fetch
+    fetcher.fetch_one(instance)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 279, in fetch_one
+    rel_obj = self.get_object(instance)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 231, in get_object
+    return qs.get(self.field.get_reverse_related_filter(instance))
+           ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\query.py", line 679, in get
+    num = len(clone)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\query.py", line 416, in __len__
+    self._fetch_all()
+    ~~~~~~~~~~~~~~~^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\query.py", line 2239, in _fetch_all
+    self._result_cache = list(self._iterable_class(self))
+                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\query.py", line 98, in __iter__
+    results = compiler.execute_sql(
+        chunked_fetch=self.chunked_fetch, chunk_size=self.chunk_size
+    )
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\models\sql\compiler.py", line 1624, in execute_sql
+    cursor.execute(sql, params)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 122, in execute
+    return super().execute(sql, params)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 79, in execute
+    return self._execute_with_wrappers(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        sql, params, many=False, executor=self._execute
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 92, in _execute_with_wrappers
+    return executor(sql, params, many, context)
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 100, in _execute
+    with self.db.wrap_database_errors:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\utils.py", line 94, in __exit__
+    raise dj_exc_value.with_traceback(traceback) from exc_value
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\HP\MTM-SMS\backend\venv\Lib\site-packages\psycopg\cursor.py", line 117, in execute
+    raise ex.with_traceback(None)
+django.db.utils.ProgrammingError: column core_school.logo does not exist
+LINE 1: ..._school"."phone_number", "core_school"."address", "core_scho...
+                                                             ^
+[13/Aug/2026 21:21:22] "GET /api/school/profile/ HTTP/1.1" 500 190967
+[13/Aug/2026 21:25:38] "OPTIONS /api/auth/token/ HTTP/1.1" 200 0
+[13/Aug/2026 21:25:41] "POST /api/auth/token/ HTTP/1.1" 200 489
+[13/Aug/2026 21:25:41] "OPTIONS /api/auth/me/ HTTP/1.1" 200 0
+[13/Aug/2026 21:25:41] "GET /api/auth/me/ HTTP/1.1" 200 99
+[13/Aug/2026 21:25:41] "OPTIONS /api/school/profile/ HTTP/1.1" 200 0
+[13/Aug/2026 21:25:41] "OPTIONS /api/school/profile/ HTTP/1.1" 200 0
+[13/Aug/2026 21:25:41] "GET /api/school/profile/ HTTP/1.1" 200 98
+[13/Aug/2026 21:25:42] "GET /api/school/profile/ HTTP/1.1" 200 98
+[13/Aug/2026 21:25:48] "GET /api/school/profile/ HTTP/1.1" 200 98
+[13/Aug/2026 21:25:48] "GET /api/school/profile/ HTTP/1.1" 200 98
+[13/Aug/2026 21:25:51] "GET /api/school/profile/ HTTP/1.1" 200 98
+[13/Aug/2026 21:25:51] "GET /api/school/profile/ HTTP/1.1" 200 98
+[13/Aug/2026 21:25:54] "GET /api/school/profile/ HTTP/1.1" 200 98
+[13/Aug/2026 21:25:54] "GET /api/school/profile/ HTTP/1.1" 200 98
+[13/Aug/2026 21:25:58] "GET /api/school/profile/ HTTP/1.1" 200 98
+[13/Aug/2026 21:25:58] "GET /api/school/profile/ HTTP/1.1" 200 98

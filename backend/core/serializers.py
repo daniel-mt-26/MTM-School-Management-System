@@ -65,6 +65,15 @@ class SchoolSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at"]
 
 
+class SchoolProfileSerializer(serializers.ModelSerializer):
+    phone = serializers.CharField(source="phone_number", read_only=True)
+
+    class Meta:
+        model = School
+        fields = ["name", "email", "phone", "address", "logo"]
+        read_only_fields = fields
+
+
 class SchoolClassSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
     class Meta:
         model = SchoolClass
