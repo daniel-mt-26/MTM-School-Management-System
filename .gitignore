@@ -15,3 +15,6 @@ dist/
 
 # VS Code
 .vscode/
+
+frontend-dev.log
+frontend-dev.err.log
