@@ -66,12 +66,18 @@ class SchoolSerializer(serializers.ModelSerializer):
 
 
 class SchoolProfileSerializer(serializers.ModelSerializer):
-    phone = serializers.CharField(source="phone_number", read_only=True)
+    MAX_LOGO_SIZE = 2 * 1024 * 1024
+
+    phone = serializers.CharField(source="phone_number")
+
+    def validate_logo(self, logo):
+        if logo.size > self.MAX_LOGO_SIZE:
+            raise serializers.ValidationError("The logo must be 2 MB or smaller.")
+        return logo
 
     class Meta:
         model = School
         fields = ["name", "email", "phone", "address", "logo"]
-        read_only_fields = fields
 
 
 class SchoolClassSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):

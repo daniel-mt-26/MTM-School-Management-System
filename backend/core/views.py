@@ -65,6 +65,18 @@ class SchoolProfileView(APIView):
         school = request.user.school_administrator.school
         return Response(SchoolProfileSerializer(school, context={"request": request}).data)
 
+    def patch(self, request):
+        school = request.user.school_administrator.school
+        serializer = SchoolProfileSerializer(
+            school,
+            data=request.data,
+            partial=True,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
 
 class SchoolClassViewSet(SchoolAdminViewSet):
     queryset = SchoolClass.objects.all()

@@ -120,6 +120,23 @@ button:disabled { cursor: wait; opacity: 0.7; }
   text-align: center;
 }
 
+.school-settings-page { box-sizing: border-box; min-height: 100vh; padding: 40px 20px; background: #f7f8fa; color: #1f2937; }
+.school-settings-header, .school-settings-form { box-sizing: border-box; width: min(100%, 720px); margin: 0 auto; }
+.school-settings-header { margin-bottom: 24px; }
+.school-settings-header h1 { margin: 16px 0 6px; }
+.school-settings-header p { margin: 0; color: #6b7280; }
+.school-settings-form { display: grid; gap: 18px; padding: 32px; border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; }
+.school-settings-form label { display: grid; gap: 7px; font-weight: 600; }
+.school-settings-form input, .school-settings-form textarea { box-sizing: border-box; width: 100%; padding: 11px 12px; border: 1px solid #aeb9ca; border-radius: 6px; font: inherit; }
+.school-settings-form input:focus, .school-settings-form textarea:focus { border-color: #2457a5; outline: 3px solid #2457a533; }
+.settings-logo-row { display: flex; align-items: center; gap: 20px; padding-bottom: 8px; }
+.settings-logo { display: flex; flex: 0 0 76px; align-items: center; justify-content: center; width: 76px; height: 76px; border-radius: 12px; background: #111827; color: #fff; object-fit: contain; font-weight: 700; }
+.logo-picker span { color: #6b7280; font-size: 13px; font-weight: 400; }
+.form-success { margin: 0; padding: 10px; border-radius: 6px; background: #ecfdf3; color: #166534; }
+.settings-actions { display: flex; align-items: center; gap: 18px; }
+.settings-actions button { margin: 0; }
+.settings-cancel { color: #374151; font-weight: 600; text-decoration: none; }
+
 .school-identity h1 {
   margin: 0;
   font-size: 22px;

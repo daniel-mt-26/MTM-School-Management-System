@@ -1,6 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -157,6 +158,87 @@ class TenantIsolationTests(APITestCase):
 
     def test_unauthenticated_user_is_denied_school_profile(self):
         self.assertEqual(self.client.get("/api/school/profile/").status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_school_a_admin_can_update_only_school_a_profile(self):
+        self.authenticate(self.admin_a)
+
+        response = self.client.patch("/api/school/profile/", {
+            "name": "Updated School A",
+            "email": "updated-a@example.test",
+            "phone": "111",
+            "address": "New address",
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.school_a.refresh_from_db()
+        self.school_b.refresh_from_db()
+        self.assertEqual(self.school_a.name, "Updated School A")
+        self.assertEqual(self.school_a.phone_number, "111")
+        self.assertEqual(self.school_b.name, "School B")
+
+    def test_school_id_cannot_change_profile_update_tenant(self):
+        self.authenticate(self.admin_a)
+
+        response = self.client.patch("/api/school/profile/", {
+            "school_id": self.school_b.id,
+            "address": "School A only",
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.school_a.refresh_from_db()
+        self.school_b.refresh_from_db()
+        self.assertEqual(self.school_a.address, "School A only")
+        self.assertEqual(self.school_b.address, "")
+
+    def test_parent_cannot_update_school_profile(self):
+        self.authenticate(self.parent_a_user)
+        response = self.client.patch("/api/school/profile/", {"name": "Attack"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_platform_admin_cannot_update_school_profile(self):
+        self.authenticate(self.platform_admin)
+        response = self.client.patch("/api/school/profile/", {"name": "Attack"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_user_cannot_update_school_profile(self):
+        response = self.client.patch("/api/school/profile/", {"name": "Attack"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_invalid_logo_upload_is_rejected(self):
+        self.authenticate(self.admin_a)
+        invalid_logo = SimpleUploadedFile("not-an-image.txt", b"not an image", content_type="text/plain")
+
+        response = self.client.patch("/api/school/profile/", {"logo": invalid_logo}, format="multipart")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("logo", response.data)
+
+    def test_oversized_logo_upload_is_rejected(self):
+        self.authenticate(self.admin_a)
+        oversized_logo = SimpleUploadedFile("large.png", b"x" * (2 * 1024 * 1024 + 1), content_type="image/png")
+
+        response = self.client.patch("/api/school/profile/", {"logo": oversized_logo}, format="multipart")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("logo", response.data)
+
+    def test_valid_logo_upload_succeeds(self):
+        self.authenticate(self.admin_a)
+        gif = (
+            b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff"
+            b"!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00"
+            b"\x02\x02D\x01\x00;"
+        )
+        valid_logo = SimpleUploadedFile("school.gif", gif, content_type="image/gif")
+
+        response = self.client.patch("/api/school/profile/", {"logo": valid_logo}, format="multipart")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["logo"].endswith(".gif"))
+        self.school_a.refresh_from_db()
+        saved_logo = self.school_a.logo
+        self.addCleanup(saved_logo.storage.delete, saved_logo.name)
+        self.assertTrue(saved_logo.storage.exists(saved_logo.name))
 
     def test_school_admin_cannot_retrieve_update_or_delete_other_school_student(self):
         self.authenticate(self.admin_a)
