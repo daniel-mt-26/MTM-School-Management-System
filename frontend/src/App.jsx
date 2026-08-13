@@ -11,6 +11,8 @@ import PlatformDashboard from './pages/PlatformDashboard'
 import SchoolDashboard from './pages/SchoolDashboard'
 import SchoolSettingsPage from './pages/SchoolSettingsPage'
 import StudentsPage from './pages/StudentsPage'
+import StudentDetailPage from './pages/StudentDetailPage'
+import StudentFormPage from './pages/StudentFormPage'
 import './App.css'
 
 function App() {
@@ -25,6 +27,9 @@ function App() {
           <Route element={<ProtectedRoute allowedRole="school_admin" />}>
             <Route path="/school" element={<SchoolDashboard />} />
             <Route path="/school/students" element={<StudentsPage />} />
+            <Route path="/school/students/new" element={<StudentFormPage />} />
+            <Route path="/school/students/:studentId" element={<StudentDetailPage />} />
+            <Route path="/school/students/:studentId/edit" element={<StudentFormPage />} />
             <Route path="/school/parents" element={<ParentsPage />} />
             <Route path="/school/academics" element={<AcademicsPage />} />
             <Route path="/school/finance" element={<FinancePage />} />

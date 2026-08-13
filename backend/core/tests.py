@@ -76,6 +76,7 @@ class TenantIsolationTests(APITestCase):
 
     def make_student(self, school_class, admission_number, first_name):
         return Student.objects.create(
+            school=school_class.school,
             school_class=school_class,
             admission_number=admission_number,
             first_name=first_name,
@@ -240,6 +241,72 @@ class TenantIsolationTests(APITestCase):
         self.addCleanup(saved_logo.storage.delete, saved_logo.name)
         self.assertTrue(saved_logo.storage.exists(saved_logo.name))
 
+    def test_school_search_returns_only_own_matching_students(self):
+        other_alice = self.make_student(self.class_b, "B-ALICE", "Alice")
+        self.authenticate(self.admin_a)
+
+        response = self.client.get("/api/school/search/", {"q": "  aLiCe  "})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id"] for item in response.data["students"]], [self.student_a.id])
+        self.assertNotIn(other_alice.id, [item["id"] for item in response.data["students"]])
+        self.assertNotIn("school_id", response.data["students"][0])
+
+    def test_school_search_returns_only_own_classes(self):
+        self.authenticate(self.admin_a)
+
+        response = self.client.get("/api/school/search/", {"q": "Grade"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["classes"], [{"id": self.class_a.id, "name": self.class_a.name}])
+
+    def test_school_search_scopes_parent_results_through_own_students(self):
+        self.parent_a_user.first_name = "Shared"
+        self.parent_b_user.first_name = "Shared"
+        self.parent_a_user.save(update_fields=["first_name"])
+        self.parent_b_user.save(update_fields=["first_name"])
+        self.authenticate(self.admin_a)
+
+        response = self.client.get("/api/school/search/", {"q": "shared"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id"] for item in response.data["parents"]], [self.parent_a.id])
+        self.assertEqual(set(response.data["parents"][0]), {"id", "display_name", "username", "phone"})
+
+    def test_school_search_ignores_school_id_tenant_override(self):
+        self.authenticate(self.admin_a)
+
+        response = self.client.get("/api/school/search/", {"q": "Beth", "school_id": self.school_b.id})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["students"], [])
+
+    def test_school_search_denies_unauthenticated_parent_and_platform_users(self):
+        self.assertEqual(self.client.get("/api/school/search/", {"q": "Al"}).status_code, status.HTTP_401_UNAUTHORIZED)
+        self.authenticate(self.parent_a_user)
+        self.assertEqual(self.client.get("/api/school/search/", {"q": "Al"}).status_code, status.HTTP_403_FORBIDDEN)
+        self.authenticate(self.platform_admin)
+        self.assertEqual(self.client.get("/api/school/search/", {"q": "Al"}).status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_school_search_short_and_empty_queries_are_safe(self):
+        self.authenticate(self.admin_a)
+        empty_results = {"students": [], "parents": [], "classes": []}
+
+        for query in ("", " ", "A", " A "):
+            response = self.client.get("/api/school/search/", {"q": query})
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(response.data, empty_results)
+
+    def test_school_search_limits_each_result_category_to_ten(self):
+        for index in range(12):
+            self.make_student(self.class_a, f"LIMIT-{index:02d}", f"Limit{index:02d}")
+        self.authenticate(self.admin_a)
+
+        response = self.client.get("/api/school/search/", {"q": "Limit"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["students"]), 10)
+
     def test_school_admin_cannot_retrieve_update_or_delete_other_school_student(self):
         self.authenticate(self.admin_a)
         detail_url = f"/api/school/students/{self.student_b.id}/"
@@ -260,6 +327,263 @@ class TenantIsolationTests(APITestCase):
         }, format="json")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(Student.objects.filter(admission_number="A-ATTACK").exists())
+
+    def test_student_list_search_and_filters_are_tenant_scoped(self):
+        inactive_a = self.make_student(self.class_a, "A-002", "Aaron")
+        inactive_a.is_active = False
+        inactive_a.save(update_fields=["is_active"])
+        other_class_a = SchoolClass.objects.create(school=self.school_a, name="Grade 3A")
+        self.make_student(other_class_a, "A-003", "April")
+        self.authenticate(self.admin_a)
+
+        search = self.client.get("/api/school/students/", {"q": "Ali", "school_id": self.school_b.id})
+        self.assertEqual([item["id"] for item in search.data], [self.student_a.id])
+        self.assertNotIn("school_id", search.data[0])
+
+        class_filter = self.client.get("/api/school/students/", {"school_class": other_class_a.id})
+        self.assertEqual(len(class_filter.data), 1)
+        self.assertEqual(class_filter.data[0]["class_name"], "Grade 3A")
+        cross_tenant_class = self.client.get("/api/school/students/", {"school_class": self.class_b.id})
+        self.assertEqual(cross_tenant_class.data, [])
+
+        inactive = self.client.get("/api/school/students/", {"is_active": "false"})
+        self.assertEqual([item["id"] for item in inactive.data], [inactive_a.id])
+
+    def test_school_admin_creates_student_with_server_controlled_school(self):
+        self.authenticate(self.admin_a)
+        attempted_override = self.client.post("/api/school/students/", {
+            "school_id": self.school_b.id,
+            "school": self.school_b.id,
+            "admission_number": "A-NEW",
+            "first_name": "New",
+            "last_name": "Learner",
+            "date_of_birth": "2018-01-01",
+            "school_class": self.class_a.id,
+            "enrolled_on": "2026-02-01",
+            "is_active": True,
+        }, format="json")
+        self.assertEqual(attempted_override.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("school", attempted_override.data)
+
+        response = self.client.post("/api/school/students/", {
+            "admission_number": "A-NEW",
+            "first_name": "New",
+            "last_name": "Learner",
+            "date_of_birth": "2018-01-01",
+            "school_class": self.class_a.id,
+            "enrolled_on": "2026-02-01",
+            "is_active": True,
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        student = Student.objects.get(pk=response.data["id"])
+        self.assertEqual(student.school_class.school, self.school_a)
+        self.assertEqual(student.school, self.school_a)
+        enrollment = student.enrollments.get()
+        self.assertEqual(enrollment.school_class, self.class_a)
+        self.assertEqual(enrollment.academic_year, self.year_a)
+
+    def test_same_admission_number_is_allowed_in_different_schools(self):
+        self.authenticate(self.admin_b)
+        response = self.client.post("/api/school/students/", {
+            "admission_number": self.student_a.admission_number,
+            "first_name": "Duplicate",
+            "last_name": "Number",
+            "date_of_birth": "2018-01-01",
+            "school_class": self.class_b.id,
+            "enrolled_on": "2026-02-01",
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Student.objects.filter(admission_number=self.student_a.admission_number).count(), 2)
+        created = Student.objects.get(pk=response.data["id"])
+        self.assertEqual(created.school, self.school_b)
+
+    def test_duplicate_admission_number_is_rejected_within_each_school(self):
+        for admin, school_class, admission_number in (
+            (self.admin_a, self.class_a, self.student_a.admission_number),
+            (self.admin_b, self.class_b, self.student_b.admission_number),
+        ):
+            self.authenticate(admin)
+            response = self.client.post("/api/school/students/", {
+                "admission_number": admission_number,
+                "first_name": "Duplicate",
+                "last_name": "Number",
+                "date_of_birth": "2018-01-01",
+                "school_class": school_class.id,
+                "enrolled_on": "2026-02-01",
+            }, format="json")
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+            self.assertIn("admission_number", response.data)
+
+    def test_student_detail_contains_only_safe_profile_relationships_and_history(self):
+        self.authenticate(self.admin_a)
+        response = self.client.get(f"/api/school/students/{self.student_a.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([link["parent"] for link in response.data["parents"]], [self.parent_a.id])
+        self.assertNotIn(self.parent_b.id, [link["parent"] for link in response.data["parents"]])
+        self.assertEqual([item["id"] for item in response.data["enrollment_history"]], [self.enrollment_a.id])
+        self.assertNotIn("school_id", response.data)
+        self.assertNotIn("payments", response.data)
+        self.assertEqual(self.client.get(f"/api/school/students/{self.student_b.id}/").status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_student_class_transfer_preserves_same_year_history(self):
+        new_class = SchoolClass.objects.create(school=self.school_a, name="Grade 3A")
+        self.authenticate(self.admin_a)
+
+        response = self.client.post(f"/api/school/students/{self.student_a.id}/transfer/", {
+            "school_class": new_class.id,
+            "transfer_effective_date": "2026-05-12",
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.student_a.refresh_from_db()
+        self.enrollment_a.refresh_from_db()
+        self.assertEqual(self.student_a.school_class, new_class)
+        self.assertEqual(str(self.enrollment_a.left_on), "2026-05-11")
+        history = self.student_a.enrollments.filter(academic_year=self.year_a).order_by("enrolled_on", "id")
+        self.assertEqual(history.count(), 2)
+        self.assertEqual(history.last().school_class, new_class)
+        self.assertEqual(str(history.last().enrolled_on), "2026-05-12")
+        self.assertIsNone(history.last().left_on)
+        self.assertEqual(history.filter(left_on__isnull=True).count(), 1)
+        self.assertEqual(self.student_a.school, self.school_a)
+
+    def test_student_cannot_transfer_to_other_school_class(self):
+        self.authenticate(self.admin_a)
+        response = self.client.post(
+            f"/api/school/students/{self.student_a.id}/transfer/",
+            {"school_class": self.class_b.id, "transfer_effective_date": "2026-05-12"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.student_a.refresh_from_db()
+        self.assertEqual(self.student_a.school_class, self.class_a)
+        self.assertEqual(self.student_a.school, self.school_a)
+
+    def test_backdated_transfer_rejects_invalid_date_and_preserves_history(self):
+        new_class = SchoolClass.objects.create(school=self.school_a, name="Grade 3B")
+        self.authenticate(self.admin_a)
+        url = f"/api/school/students/{self.student_a.id}/transfer/"
+
+        response = self.client.post(url, {
+            "school_class": new_class.id,
+            "transfer_effective_date": "2026-01-09",
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.enrollment_a.refresh_from_db()
+        self.assertIsNone(self.enrollment_a.left_on)
+        self.assertEqual(self.student_a.enrollments.count(), 1)
+
+        response = self.client.post(url, {
+            "school_class": new_class.id,
+            "transfer_effective_date": "2027-01-01",
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.student_a.enrollments.count(), 1)
+
+    def test_transfer_requires_one_open_enrollment(self):
+        new_class = SchoolClass.objects.create(school=self.school_a, name="Grade 4A")
+        self.enrollment_a.left_on = date(2026, 3, 31)
+        self.enrollment_a.save(update_fields=["left_on"])
+        self.authenticate(self.admin_a)
+        response = self.client.post(f"/api/school/students/{self.student_a.id}/transfer/", {
+            "school_class": new_class.id,
+            "transfer_effective_date": "2026-05-12",
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("transfer_effective_date", response.data)
+
+    def test_unchanged_class_transfer_creates_no_enrollment(self):
+        self.authenticate(self.admin_a)
+        response = self.client.post(f"/api/school/students/{self.student_a.id}/transfer/", {
+            "school_class": self.class_a.id,
+            "transfer_effective_date": "2026-05-12",
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self.student_a.enrollments.count(), 1)
+
+    def test_ordinary_patch_cannot_change_class_or_school(self):
+        new_class = SchoolClass.objects.create(school=self.school_a, name="Grade 5A")
+        self.authenticate(self.admin_a)
+        school_response = self.client.patch(f"/api/school/students/{self.student_a.id}/", {
+            "school": self.school_b.id,
+            "school_id": self.school_b.id,
+        }, format="json")
+        self.assertEqual(school_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("school", school_response.data)
+
+        response = self.client.patch(f"/api/school/students/{self.student_a.id}/", {
+            "school_class": new_class.id,
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.student_a.refresh_from_db()
+        self.assertEqual(self.student_a.school, self.school_a)
+        self.assertEqual(self.student_a.school_class, self.class_a)
+
+    def test_parent_and_platform_users_cannot_access_student_crud(self):
+        urls = ["/api/school/students/", f"/api/school/students/{self.student_a.id}/"]
+        for user in (self.parent_a_user, self.platform_admin):
+            self.authenticate(user)
+            for url in urls:
+                self.assertEqual(self.client.get(url).status_code, status.HTTP_403_FORBIDDEN)
+            self.assertEqual(
+                self.client.patch(urls[1], {"first_name": "Attack"}, format="json").status_code,
+                status.HTTP_403_FORBIDDEN,
+            )
+
+    def test_available_parent_list_is_tenant_scoped_and_excludes_unowned_parent(self):
+        unowned_user = self.make_user("unowned-parent", User.Role.PARENT)
+        Parent.objects.create(user=unowned_user, phone_number="500")
+        self.authenticate(self.admin_a)
+
+        response = self.client.get("/api/school/available-parents/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id"] for item in response.data], [self.parent_a.id])
+
+    def test_school_admin_can_link_and_unlink_available_parent(self):
+        second_student = self.make_student(self.class_a, "A-LINK", "Linked")
+        self.authenticate(self.admin_a)
+
+        response = self.client.post("/api/school/parent-links/", {
+            "parent": self.parent_a.id,
+            "student": second_student.id,
+            "relationship": "Mother",
+            "is_primary_contact": True,
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        link = ParentStudent.objects.get(pk=response.data["id"])
+        self.assertEqual(link.student, second_student)
+        self.assertEqual(self.client.delete(f"/api/school/parent-links/{link.id}/").status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(ParentStudent.objects.filter(pk=link.id).exists())
+
+    def test_school_admin_cannot_link_other_school_parent(self):
+        second_student = self.make_student(self.class_a, "A-NOLINK", "Safe")
+        self.authenticate(self.admin_a)
+        response = self.client.post("/api/school/parent-links/", {
+            "parent": self.parent_b.id,
+            "student": second_student.id,
+            "relationship": "Guardian",
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(ParentStudent.objects.filter(parent=self.parent_b, student=second_student).exists())
+
+    def test_primary_contact_constraint_returns_clean_validation_error(self):
+        self.parent_a.student_links.update(is_primary_contact=True)
+        second_user = self.make_user("parent-a-second", User.Role.PARENT)
+        second_parent = Parent.objects.create(user=second_user, phone_number="501")
+        ParentStudent.objects.create(parent=second_parent, student=self.make_student(self.class_a, "A-OWNER", "Owner"))
+        self.authenticate(self.admin_a)
+        response = self.client.post("/api/school/parent-links/", {
+            "parent": second_parent.id,
+            "student": self.student_a.id,
+            "relationship": "Father",
+            "is_primary_contact": True,
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("is_primary_contact", response.data)
 
     def test_school_admin_cannot_use_other_school_fee_or_payment_ids(self):
         self.authenticate(self.admin_a)

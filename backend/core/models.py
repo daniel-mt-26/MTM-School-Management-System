@@ -102,7 +102,8 @@ class SchoolClass(models.Model):
 
 
 class Student(models.Model):
-    admission_number = models.CharField(max_length=50, unique=True)
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="students")
+    admission_number = models.CharField(max_length=50)
     first_name = models.CharField(max_length=150)
     last_name = models.CharField(max_length=150)
     date_of_birth = models.DateField()
@@ -112,7 +113,14 @@ class Student(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["school", "admission_number"], name="unique_student_admission_per_school"),
+        ]
         indexes = [models.Index(fields=["school_class", "is_active"]), models.Index(fields=["last_name", "first_name"])]
+
+    def clean(self):
+        if self.school_class_id and self.school_id != self.school_class.school_id:
+            raise ValidationError({"school_class": "The class must belong to the student's school."})
 
     def __str__(self):
         return f"{self.admission_number} - {self.first_name} {self.last_name}"
@@ -166,14 +174,26 @@ class StudentEnrollment(models.Model):
     left_on = models.DateField(null=True, blank=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["student", "academic_year"], name="one_enrollment_per_student_per_year")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student"],
+                condition=Q(left_on__isnull=True),
+                name="one_open_enrollment_per_student",
+            ),
+            models.CheckConstraint(
+                condition=Q(left_on__isnull=True) | Q(left_on__gte=models.F("enrolled_on")),
+                name="enrollment_left_on_not_before_start",
+            ),
+        ]
         indexes = [models.Index(fields=["school_class", "academic_year"])]
 
     def clean(self):
         if self.school_class.school_id != self.academic_year.school_id:
             raise ValidationError("Class and academic year must belong to the same school.")
-        if self.student.school_class.school_id != self.school_class.school_id:
+        if self.student.school_id != self.school_class.school_id:
             raise ValidationError("A student enrollment must remain within the student's school.")
+        if self.left_on and self.left_on < self.enrolled_on:
+            raise ValidationError({"left_on": "The leaving date cannot be before the enrollment date."})
 
 
 class Fee(models.Model):

@@ -5,6 +5,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .views import (
     AcademicResultViewSet,
     AcademicYearViewSet,
+    AvailableParentView,
     ClassSubjectViewSet,
     CurrentUserView,
     FeeViewSet,
@@ -22,6 +23,7 @@ from .views import (
     SchoolClassViewSet,
     SchoolParentStudentViewSet,
     SchoolProfileView,
+    SchoolSearchView,
     StudentEnrollmentViewSet,
     StudentFeeAssignmentViewSet,
     StudentViewSet,
@@ -58,5 +60,7 @@ urlpatterns = [
     path("auth/token/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
     path("auth/me/", CurrentUserView.as_view(), name="current-user"),
     path("school/profile/", SchoolProfileView.as_view(), name="school-profile"),
+    path("school/search/", SchoolSearchView.as_view(), name="school-search"),
+    path("school/available-parents/", AvailableParentView.as_view(), name="school-available-parents"),
     path("", include(router.urls)),
 ]

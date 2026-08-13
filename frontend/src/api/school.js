@@ -4,6 +4,10 @@ export function getSchoolProfile() {
   return apiClient('/school/profile/')
 }
 
+export function searchSchool(query) {
+  return apiClient(`/school/search/?q=${encodeURIComponent(query)}`)
+}
+
 export function updateSchoolProfile(profile, logo) {
   if (logo) {
     const formData = new FormData()

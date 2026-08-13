@@ -1,6 +1,12 @@
+from datetime import timedelta
+
+from django.db import transaction
+from django.db.models import Prefetch, Q
 from django.http import FileResponse, Http404
+from django.shortcuts import get_object_or_404
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -12,6 +18,7 @@ from .models import (
     Fee,
     FinancialLedgerEntry,
     Notification,
+    Parent,
     ParentStudent,
     Payment,
     Receipt,
@@ -28,6 +35,7 @@ from .permissions import IsParent, IsPlatformAdministrator, IsSchoolAdministrato
 from .serializers import (
     AcademicResultSerializer,
     AcademicYearSerializer,
+    AvailableParentSerializer,
     ClassSubjectSerializer,
     CurrentUserSerializer,
     FeeSerializer,
@@ -47,7 +55,10 @@ from .serializers import (
     SchoolSerializer,
     StudentEnrollmentSerializer,
     StudentFeeAssignmentSerializer,
-    StudentSerializer,
+    StudentDetailSerializer,
+    StudentListSerializer,
+    StudentTransferSerializer,
+    StudentWriteSerializer,
     SubjectSerializer,
     TermSerializer,
 )
@@ -78,6 +89,67 @@ class SchoolProfileView(APIView):
         return Response(serializer.data)
 
 
+class SchoolSearchView(APIView):
+    permission_classes = [IsSchoolAdministrator]
+    result_limit = 10
+
+    def get(self, request):
+        query = request.query_params.get("q", "").strip()
+        empty_results = {"students": [], "parents": [], "classes": []}
+        if len(query) < 2:
+            return Response(empty_results)
+
+        school = request.user.school_administrator.school
+        students = (
+            Student.objects.filter(school=school)
+            .filter(
+                Q(first_name__icontains=query)
+                | Q(last_name__icontains=query)
+                | Q(admission_number__icontains=query)
+            )
+            .select_related("school_class")
+            .order_by("last_name", "first_name", "id")[: self.result_limit]
+        )
+        parents = (
+            Parent.objects.filter(student_links__student__school=school)
+            .filter(
+                Q(user__first_name__icontains=query)
+                | Q(user__last_name__icontains=query)
+                | Q(user__username__icontains=query)
+                | Q(phone_number__icontains=query)
+            )
+            .select_related("user")
+            .distinct()
+            .order_by("user__last_name", "user__first_name", "id")[: self.result_limit]
+        )
+        classes = (
+            SchoolClass.objects.filter(school=school, name__icontains=query)
+            .order_by("name", "id")[: self.result_limit]
+        )
+
+        return Response({
+            "students": [
+                {
+                    "id": student.id,
+                    "display_name": f"{student.first_name} {student.last_name}".strip(),
+                    "admission_number": student.admission_number,
+                    "class_name": student.school_class.name,
+                }
+                for student in students
+            ],
+            "parents": [
+                {
+                    "id": parent.id,
+                    "display_name": parent.user.get_full_name() or parent.user.username,
+                    "username": parent.user.username,
+                    "phone": parent.phone_number,
+                }
+                for parent in parents
+            ],
+            "classes": [{"id": school_class.id, "name": school_class.name} for school_class in classes],
+        })
+
+
 class SchoolClassViewSet(SchoolAdminViewSet):
     queryset = SchoolClass.objects.all()
     serializer_class = SchoolClassSerializer
@@ -89,8 +161,117 @@ class SchoolClassViewSet(SchoolAdminViewSet):
 
 class StudentViewSet(SchoolAdminViewSet):
     queryset = Student.objects.all()
-    serializer_class = StudentSerializer
-    school_lookup = "school_class__school"
+    serializer_class = StudentWriteSerializer
+    school_lookup = "school"
+
+    def get_queryset(self):
+        queryset = (
+            super().get_queryset()
+            .select_related("school_class")
+            .prefetch_related(
+                Prefetch(
+                    "enrollments",
+                    queryset=StudentEnrollment.objects.select_related("academic_year", "school_class").order_by(
+                        "academic_year__start_date", "enrolled_on", "id"
+                    ),
+                ),
+                "parent_links__parent__user",
+            )
+        )
+        query = self.request.query_params.get("q", "").strip()
+        if query:
+            queryset = queryset.filter(
+                Q(first_name__icontains=query)
+                | Q(last_name__icontains=query)
+                | Q(admission_number__icontains=query)
+            )
+        class_id = self.request.query_params.get("school_class")
+        if class_id:
+            queryset = queryset.filter(school_class_id=class_id)
+        active = self.request.query_params.get("is_active", "").lower()
+        if active in {"true", "false"}:
+            queryset = queryset.filter(is_active=active == "true")
+        return queryset.order_by("last_name", "first_name", "id")
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return StudentListSerializer
+        if self.action == "retrieve":
+            return StudentDetailSerializer
+        return StudentWriteSerializer
+
+    def perform_create(self, serializer):
+        academic_year = AcademicYear.objects.filter(school=self.get_school(), is_current=True).first()
+        if not academic_year:
+            raise ValidationError({"enrolled_on": "A current academic year is required to enroll a student."})
+        with transaction.atomic():
+            student = serializer.save(school=self.get_school())
+            StudentEnrollment.objects.create(
+                student=student,
+                school_class=student.school_class,
+                academic_year=academic_year,
+                enrolled_on=student.enrolled_on,
+            )
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def transfer(self, request, *args, **kwargs):
+        student = get_object_or_404(self.get_queryset().select_for_update(), pk=kwargs["pk"])
+        serializer = StudentTransferSerializer(data=request.data, context={"school": self.get_school()})
+        serializer.is_valid(raise_exception=True)
+        next_class = serializer.validated_data["school_class"]
+        effective_date = serializer.validated_data["transfer_effective_date"]
+
+        if next_class.pk == student.school_class_id:
+            return Response(StudentDetailSerializer(student, context={"request": request}).data)
+
+        open_enrollments = list(
+            student.enrollments.select_for_update().select_related("academic_year").filter(left_on__isnull=True)
+        )
+        if len(open_enrollments) != 1:
+            raise ValidationError({"transfer_effective_date": "The student must have exactly one open enrollment before transfer."})
+        current_enrollment = open_enrollments[0]
+        if effective_date <= current_enrollment.enrolled_on:
+            raise ValidationError({
+                "transfer_effective_date": "The transfer date must be after the current enrollment start date.",
+            })
+        if not current_enrollment.academic_year.start_date <= effective_date <= current_enrollment.academic_year.end_date:
+            raise ValidationError({
+                "transfer_effective_date": "The transfer date must fall within the current enrollment's academic year.",
+            })
+
+        current_enrollment.left_on = effective_date - timedelta(days=1)
+        current_enrollment.save(update_fields=["left_on"])
+        StudentEnrollment.objects.create(
+            student=student,
+            school_class=next_class,
+            academic_year=current_enrollment.academic_year,
+            enrolled_on=effective_date,
+        )
+        student.school_class = next_class
+        student.full_clean()
+        student.save(update_fields=["school_class"])
+        refreshed = self.get_queryset().get(pk=student.pk)
+        return Response(StudentDetailSerializer(refreshed, context={"request": request}).data)
+
+
+class AvailableParentView(APIView):
+    permission_classes = [IsSchoolAdministrator]
+    result_limit = 20
+
+    def get(self, request):
+        school = request.user.school_administrator.school
+        query = request.query_params.get("q", "").strip()
+        parents = Parent.objects.filter(student_links__student__school=school)
+        if query:
+            parents = parents.filter(
+                Q(user__first_name__icontains=query)
+                | Q(user__last_name__icontains=query)
+                | Q(user__username__icontains=query)
+                | Q(phone_number__icontains=query)
+            )
+        parents = parents.select_related("user").distinct().order_by("user__last_name", "user__first_name", "id")[: self.result_limit]
+        return Response(AvailableParentSerializer(parents, many=True).data)
 
 
 class AcademicYearViewSet(SchoolAdminViewSet):
@@ -201,7 +382,7 @@ class NotificationViewSet(SchoolAdminViewSet):
 class SchoolParentStudentViewSet(SchoolAdminViewSet):
     queryset = ParentStudent.objects.all()
     serializer_class = SchoolParentStudentSerializer
-    school_lookup = "student__school_class__school"
+    school_lookup = "student__school"
 
 
 class ParentReadOnlyViewSet(ParentScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet):

@@ -10,6 +10,7 @@ from .models import (
     Fee,
     FinancialLedgerEntry,
     Notification,
+    Parent,
     ParentStudent,
     Payment,
     Receipt,
@@ -87,13 +88,123 @@ class SchoolClassSerializer(SchoolScopedSerializerMixin, serializers.ModelSerial
         read_only_fields = ["id"]
 
 
-class StudentSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+class StudentWriteSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
     scoped_related_fields = {"school_class": (SchoolClass, "school")}
 
     class Meta:
         model = Student
         fields = ["id", "admission_number", "first_name", "last_name", "date_of_birth", "school_class", "is_active", "enrolled_on", "created_at"]
         read_only_fields = ["id", "created_at"]
+
+    def validate(self, attrs):
+        if "school" in self.initial_data or "school_id" in self.initial_data:
+            raise serializers.ValidationError({"school": "School ownership is controlled by the authenticated account."})
+        candidate = copy(self.instance) if self.instance is not None else Student()
+        school = self.get_school()
+        for field_name, value in attrs.items():
+            setattr(candidate, field_name, value)
+        candidate.school = school
+        if self.instance is not None:
+            next_class = attrs.get("school_class", self.instance.school_class)
+            if next_class.pk != self.instance.school_class_id:
+                raise serializers.ValidationError({
+                    "school_class": "Use the student transfer action to change classes.",
+                })
+        admission_number = attrs.get("admission_number", getattr(self.instance, "admission_number", None))
+        duplicate = Student.objects.filter(school=school, admission_number=admission_number)
+        if self.instance is not None:
+            duplicate = duplicate.exclude(pk=self.instance.pk)
+        if duplicate.exists():
+            raise serializers.ValidationError({
+                "admission_number": "A student with this admission number already exists in this school.",
+            })
+        try:
+            candidate.clean()
+        except DjangoValidationError as exc:
+            if hasattr(exc, "message_dict"):
+                raise serializers.ValidationError(exc.message_dict) from exc
+            raise serializers.ValidationError(exc.messages) from exc
+        return attrs
+
+
+class StudentTransferSerializer(SchoolScopedSerializerMixin, serializers.Serializer):
+    scoped_related_fields = {"school_class": (SchoolClass, "school")}
+
+    school_class = serializers.PrimaryKeyRelatedField(queryset=SchoolClass.objects.none())
+    transfer_effective_date = serializers.DateField()
+
+    def validate(self, attrs):
+        return attrs
+
+
+class StudentListSerializer(serializers.ModelSerializer):
+    display_name = serializers.SerializerMethodField()
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+
+    def get_display_name(self, student):
+        return f"{student.first_name} {student.last_name}".strip()
+
+    class Meta:
+        model = Student
+        fields = ["id", "admission_number", "first_name", "last_name", "display_name", "class_name", "is_active"]
+        read_only_fields = fields
+
+
+class StudentParentLinkSerializer(serializers.ModelSerializer):
+    parent_name = serializers.SerializerMethodField()
+    phone = serializers.CharField(source="parent.phone_number", read_only=True)
+    username = serializers.CharField(source="parent.user.username", read_only=True)
+
+    def get_parent_name(self, link):
+        return link.parent.user.get_full_name() or link.parent.user.username
+
+    class Meta:
+        model = ParentStudent
+        fields = ["id", "parent", "parent_name", "username", "phone", "relationship", "is_primary_contact"]
+        read_only_fields = fields
+
+
+class StudentEnrollmentHistorySerializer(serializers.ModelSerializer):
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+    academic_year = serializers.CharField(source="academic_year.name", read_only=True)
+
+    class Meta:
+        model = StudentEnrollment
+        fields = ["id", "academic_year", "class_name", "enrolled_on", "left_on"]
+        read_only_fields = fields
+
+
+class StudentDetailSerializer(serializers.ModelSerializer):
+    display_name = serializers.SerializerMethodField()
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+    parents = StudentParentLinkSerializer(source="parent_links", many=True, read_only=True)
+    enrollment_history = StudentEnrollmentHistorySerializer(source="enrollments", many=True, read_only=True)
+
+    def get_display_name(self, student):
+        return f"{student.first_name} {student.last_name}".strip()
+
+    class Meta:
+        model = Student
+        fields = [
+            "id", "admission_number", "first_name", "last_name", "display_name",
+            "date_of_birth", "school_class", "class_name", "is_active", "enrolled_on",
+            "created_at", "parents", "enrollment_history",
+        ]
+        read_only_fields = fields
+
+
+class AvailableParentSerializer(serializers.ModelSerializer):
+    display_name = serializers.SerializerMethodField()
+    username = serializers.CharField(source="user.username", read_only=True)
+    phone = serializers.CharField(source="phone_number", read_only=True)
+
+    def get_display_name(self, parent):
+        return parent.user.get_full_name() or parent.user.username
+
+    class Meta:
+        model = Parent
+        fields = ["id", "display_name", "username", "phone"]
+        read_only_fields = fields
 
 
 class AcademicYearSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
@@ -134,7 +245,7 @@ class ClassSubjectSerializer(SchoolScopedSerializerMixin, serializers.ModelSeria
 
 class StudentEnrollmentSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
     scoped_related_fields = {
-        "student": (Student, "school_class__school"),
+        "student": (Student, "school"),
         "school_class": (SchoolClass, "school"),
         "academic_year": (AcademicYear, "school"),
     }
@@ -234,7 +345,26 @@ class NotificationSerializer(SchoolScopedSerializerMixin, serializers.ModelSeria
 
 
 class SchoolParentStudentSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
-    scoped_related_fields = {"student": (Student, "school_class__school")}
+    scoped_related_fields = {
+        "student": (Student, "school"),
+        "parent": (Parent, "student_links__student__school"),
+    }
+
+    def get_fields(self):
+        fields = super().get_fields()
+        fields["parent"].queryset = fields["parent"].queryset.distinct()
+        return fields
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if attrs.get("is_primary_contact", getattr(self.instance, "is_primary_contact", False)):
+            student = attrs.get("student", getattr(self.instance, "student", None))
+            existing = ParentStudent.objects.filter(student=student, is_primary_contact=True)
+            if self.instance:
+                existing = existing.exclude(pk=self.instance.pk)
+            if existing.exists():
+                raise serializers.ValidationError({"is_primary_contact": "This student already has a primary contact."})
+        return attrs
 
     class Meta:
         model = ParentStudent
