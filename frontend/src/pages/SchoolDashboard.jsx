@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useContext, useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 
+import { AuthContext } from '../auth/context'
 import { getSchoolProfile, searchSchool } from '../api/school'
 
 const EMPTY_RESULTS = { students: [], parents: [], classes: [] }
@@ -16,6 +17,8 @@ function getInitials(name) {
 }
 
 function SchoolDashboard() {
+  const { logout } = useContext(AuthContext)
+  const navigate = useNavigate()
   const [school, setSchool] = useState(null)
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
@@ -75,6 +78,11 @@ function SchoolDashboard() {
     }
   }
 
+  function handleLogout() {
+    logout()
+    navigate('/login', { replace: true })
+  }
+
   if (error) {
     return (
       <main className="school-profile-state" role="alert">
@@ -103,7 +111,7 @@ function SchoolDashboard() {
             <p>School Management System</p>
           </div>
         </div>
-
+        <button type="button" className="school-logout secondary-button" onClick={handleLogout}>Log out</button>
       </header>
 
       <main className="dashboard-content">

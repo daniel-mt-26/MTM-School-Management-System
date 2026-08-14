@@ -24,6 +24,7 @@ class School(models.Model):
     logo = models.ImageField(upload_to="school_logos/", blank=True)
     default_currency = models.CharField(max_length=3, default="USD")
     is_active = models.BooleanField(default=True)
+    is_demo = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -549,3 +550,22 @@ class CommunicationMessage(models.Model):
             raise ValidationError("A communication message parent must belong to its school.")
         if self.student_id and self.student.school_id != self.school_id:
             raise ValidationError("A communication message student must belong to its school.")
+
+
+class AuditLog(models.Model):
+    """Append-only, safe operational audit events; never store request bodies or secrets."""
+
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="audit_logs")
+    actor = models.ForeignKey(User, on_delete=models.PROTECT, related_name="audit_logs", null=True, blank=True)
+    action = models.CharField(max_length=100)
+    resource_type = models.CharField(max_length=100)
+    resource_id = models.CharField(max_length=64, blank=True)
+    description = models.CharField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["school", "created_at"]),
+            models.Index(fields=["school", "action", "created_at"]),
+        ]

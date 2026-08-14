@@ -5,6 +5,7 @@ from django.conf import settings
 from decimal import Decimal
 
 from django.db import transaction
+from django.db import connection
 from django.db.models import Prefetch, Q
 from django.http import FileResponse, Http404
 from django.http import HttpResponse
@@ -14,11 +15,14 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import MethodNotAllowed, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
+from rest_framework_simplejwt.views import TokenObtainPairView
 
 from .models import (
     AcademicResult,
     AcademicYear,
+    AuditLog,
     Announcement,
     ClassSubject,
     CommunicationMessage,
@@ -52,10 +56,12 @@ from .communications import (
     send_announcement,
     transition_message,
 )
+from .audit import log_action
 from .permissions import IsParent, IsPlatformAdministrator, IsSchoolAdministrator
 from .serializers import (
     AcademicResultSerializer,
     AcademicYearSerializer,
+    AuditLogSerializer,
     AnnouncementSerializer,
     AvailableParentSerializer,
     ClassSubjectSerializer,
@@ -100,6 +106,11 @@ class SchoolAdminViewSet(SchoolScopedQuerysetMixin, viewsets.ModelViewSet):
     permission_classes = [IsSchoolAdministrator]
 
 
+class LoginTokenObtainPairView(TokenObtainPairView):
+    throttle_scope = "login"
+    throttle_classes = [ScopedRateThrottle]
+
+
 def receipt_pdf_response(receipt):
     """A dependency-free, server-generated single-page PDF receipt."""
     payment = receipt.payment
@@ -134,7 +145,8 @@ class SchoolProfileView(APIView):
             context={"request": request},
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        school = serializer.save()
+        log_action(school=school, actor=request.user, action="school_profile_updated", resource=school, description="School profile settings updated")
         return Response(serializer.data)
 
 
@@ -211,7 +223,8 @@ class SchoolCommunicationSettingsView(APIView):
     def patch(self, request):
         serializer = SchoolCommunicationSettingsSerializer(self.get_object(request), data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        settings_object = serializer.save()
+        log_action(school=settings_object.school, actor=request.user, action="communication_settings_updated", resource=settings_object, description="Communication settings updated")
         return Response(serializer.data)
 
 
@@ -246,6 +259,7 @@ class AnnouncementViewSet(SchoolAdminViewSet):
         if request.data.get("confirm") is not True:
             raise ValidationError({"confirm": "Set confirm to true after reviewing the recipient count."})
         announcement, recipient_count = send_announcement(self.get_object())
+        log_action(school=announcement.school, actor=request.user, action="announcement_sent", resource=announcement, description=f"Announcement sent to {recipient_count} parent(s)")
         return Response({"id": announcement.id, "status": announcement.status, "recipient_count": recipient_count})
 
 
@@ -267,6 +281,25 @@ class CommunicationMessageViewSet(SchoolScopedQuerysetMixin, mixins.ListModelMix
         if value := self.request.query_params.get("date"):
             queryset = queryset.filter(created_at__date=value)
         return queryset.order_by("-created_at", "-id")
+
+
+class AuditLogViewSet(SchoolScopedQuerysetMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    queryset = AuditLog.objects.all()
+    serializer_class = AuditLogSerializer
+    school_lookup = "school"
+    permission_classes = [IsSchoolAdministrator]
+
+    def get_queryset(self):
+        queryset = super().get_queryset().select_related("actor")
+        if value := self.request.query_params.get("actor"):
+            queryset = queryset.filter(actor_id=value)
+        if value := self.request.query_params.get("action"):
+            queryset = queryset.filter(action=value)
+        if value := self.request.query_params.get("resource_type"):
+            queryset = queryset.filter(resource_type=value)
+        if value := self.request.query_params.get("date"):
+            queryset = queryset.filter(created_at__date=value)
+        return queryset
 
 
 class SchoolParentCommunicationPreferenceView(APIView):
@@ -347,6 +380,8 @@ class N8NIntegrationView(APIView):
     """Separate shared-secret boundary for n8n; JWT roles never authorize it."""
 
     permission_classes = []
+    throttle_scope = "integration"
+    throttle_classes = [ScopedRateThrottle]
 
     def is_authorized(self, request):
         configured = getattr(settings, "MTM_N8N_INTEGRATION_SECRET", "")
@@ -504,6 +539,11 @@ class StudentViewSet(SchoolAdminViewSet):
                 academic_year=academic_year,
                 enrolled_on=student.enrolled_on,
             )
+            log_action(school=student.school, actor=self.request.user, action="student_created", resource=student, description="Student record created")
+
+    def perform_update(self, serializer):
+        student = serializer.save()
+        log_action(school=student.school, actor=self.request.user, action="student_updated", resource=student, description="Student record updated")
 
     @action(detail=True, methods=["post"])
     @transaction.atomic
@@ -543,6 +583,7 @@ class StudentViewSet(SchoolAdminViewSet):
         student.school_class = next_class
         student.full_clean()
         student.save(update_fields=["school_class"])
+        log_action(school=student.school, actor=request.user, action="student_transferred", resource=student, description=f"Transferred to {next_class.name}")
         refreshed = self.get_queryset().get(pk=student.pk)
         return Response(StudentDetailSerializer(refreshed, context={"request": request}).data)
 
@@ -592,7 +633,8 @@ class ParentViewSet(SchoolAdminViewSet):
 
     @transaction.atomic
     def perform_create(self, serializer):
-        serializer.save()
+        parent = serializer.save()
+        log_action(school=parent.school, actor=self.request.user, action="parent_created", resource=parent, description="Parent account created")
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -605,7 +647,8 @@ class ParentViewSet(SchoolAdminViewSet):
         parent = self.get_object()
         serializer = self.get_serializer(parent, data=request.data, partial=kwargs.pop("partial", False))
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        parent = serializer.save()
+        log_action(school=parent.school, actor=request.user, action="parent_updated", resource=parent, description="Parent record updated")
         parent.refresh_from_db()
         return Response(ParentDetailSerializer(parent).data)
 
@@ -717,7 +760,8 @@ class FeeViewSet(SchoolAdminViewSet):
     school_lookup = "school"
 
     def perform_create(self, serializer):
-        serializer.save(school=self.get_school(), currency=serializer.validated_data.get("currency", self.get_school().default_currency))
+        fee = serializer.save(school=self.get_school(), currency=serializer.validated_data.get("currency", self.get_school().default_currency))
+        log_action(school=fee.school, actor=self.request.user, action="fee_created", resource=fee, description="Fee created")
 
     def get_queryset(self):
         queryset = super().get_queryset().select_related("academic_year", "term", "school_class")
@@ -755,6 +799,7 @@ class StudentFeeAssignmentViewSet(SchoolAdminViewSet):
         if StudentFeeAssignment.objects.filter(student=serializer.validated_data["student"], fee=serializer.validated_data["fee"]).exists():
             raise ValidationError({"fee": "This fee is already assigned to this student."})
         assignment, _ = assign_fee(**serializer.validated_data)
+        log_action(school=assignment.student.school, actor=request.user, action="fee_assigned", resource=assignment, description="Fee assigned to student")
         return Response(self.get_serializer(assignment).data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=["post"], url_path="assign-to-class")
@@ -799,6 +844,7 @@ class PaymentViewSet(SchoolAdminViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         payment, receipt = record_payment(recorded_by=request.user, **serializer.validated_data)
+        log_action(school=payment.student_fee_assignment.student.school, actor=request.user, action="payment_recorded", resource=payment, description=f"Receipt {receipt.receipt_number} created")
         data = self.get_serializer(payment).data
         data["receipt_id"] = receipt.id
         data["receipt_number"] = receipt.receipt_number
@@ -814,6 +860,7 @@ class PaymentViewSet(SchoolAdminViewSet):
     def reverse(self, request, *args, **kwargs):
         payment = self.get_object()
         reversed_payment = reverse_payment(payment_id=payment.id, reason=request.data.get("reason", ""), reversed_by=request.user)
+        log_action(school=reversed_payment.student_fee_assignment.student.school, actor=request.user, action="payment_reversed", resource=reversed_payment, description="Payment reversed")
         return Response(self.get_serializer(reversed_payment).data)
 
 
@@ -936,7 +983,12 @@ class AcademicResultViewSet(SchoolAdminViewSet):
     school_lookup = "student_enrollment__school_class__school"
 
     def perform_create(self, serializer):
-        serializer.save(recorded_by=self.request.user)
+        result = serializer.save(recorded_by=self.request.user)
+        log_action(school=result.student_enrollment.student.school, actor=self.request.user, action="result_recorded", resource=result, description="Academic result recorded")
+
+    def perform_update(self, serializer):
+        result = serializer.save()
+        log_action(school=result.student_enrollment.student.school, actor=self.request.user, action="result_updated", resource=result, description="Academic result updated")
 
     def get_queryset(self):
         queryset = super().get_queryset().select_related(
@@ -993,6 +1045,7 @@ class ReportCardViewSet(ReportCardDownloadMixin, SchoolAdminViewSet):
     def notify_parents(self, request, *args, **kwargs):
         report_card = self.get_object()
         messages = create_report_card_messages(report_card)
+        log_action(school=report_card.student_enrollment.student.school, actor=request.user, action="report_card_notified", resource=report_card, description=f"Created {len(messages)} communication record(s)")
         return Response({"report_card": report_card.id, "messages_created": len(messages)})
 
 
@@ -1009,6 +1062,10 @@ class SchoolParentStudentViewSet(SchoolAdminViewSet):
     queryset = ParentStudent.objects.all()
     serializer_class = SchoolParentStudentSerializer
     school_lookup = "student__school"
+
+    def perform_create(self, serializer):
+        link = serializer.save()
+        log_action(school=link.student.school, actor=self.request.user, action="parent_linked", resource=link, description="Parent linked to student")
 
 
 class ParentReadOnlyViewSet(ParentScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet):
@@ -1062,3 +1119,20 @@ class CurrentUserView(APIView):
 
     def get(self, request):
         return Response(CurrentUserSerializer(request.user).data)
+
+
+class HealthView(APIView):
+    permission_classes = []
+    authentication_classes = []
+
+    def get(self, request):
+        return Response({"status": "ok", "version": getattr(settings, "MTM_APP_VERSION", "5.8")})
+
+
+class ReadinessView(HealthView):
+    def get(self, request):
+        try:
+            connection.ensure_connection()
+        except Exception:
+            return Response({"status": "unavailable"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response({"status": "ok"})

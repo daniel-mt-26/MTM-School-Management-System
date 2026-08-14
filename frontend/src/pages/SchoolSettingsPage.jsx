@@ -88,6 +88,7 @@ function SchoolSettingsPage() {
         <Link to="/school" className="dashboard-link">← Back to School Dashboard</Link>
         <h1>School Settings</h1>
         <p>Update your school's identity and contact information.</p>
+        <Link to="/school/audit" className="dashboard-link">View Audit History</Link>
       </header>
 
       <form className="school-settings-form" onSubmit={save}>

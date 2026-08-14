@@ -10,6 +10,7 @@ import ParentsPage from './pages/ParentsPage'
 import ParentDetailPage from './pages/ParentDetailPage'
 import ParentFormPage from './pages/ParentFormPage'
 import AcademicRecordsPage from './pages/AcademicRecordsPage'
+import AuditPage from './pages/AuditPage'
 import PlatformDashboard from './pages/PlatformDashboard'
 import SchoolDashboard from './pages/SchoolDashboard'
 import SchoolSettingsPage from './pages/SchoolSettingsPage'
@@ -47,6 +48,7 @@ function App() {
             <Route path="/school/communication" element={<CommunicationPage />} />
             <Route path="/school/communication/:section" element={<CommunicationPage />} />
             <Route path="/school/settings" element={<SchoolSettingsPage />} />
+            <Route path="/school/audit" element={<AuditPage />} />
           </Route>
           <Route element={<ProtectedRoute allowedRole="parent" />}>
             <Route path="/parent" element={<ParentDashboard />} />

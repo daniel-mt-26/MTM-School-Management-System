@@ -1,15 +1,19 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from rest_framework_simplejwt.views import TokenRefreshView
 
 from .views import (
     AcademicResultViewSet,
     AcademicYearViewSet,
+    AuditLogViewSet,
     AnnouncementViewSet,
     AvailableParentView,
     ClassSubjectViewSet,
     CommunicationMessageViewSet,
     CurrentUserView,
+    LoginTokenObtainPairView,
+    HealthView,
+    ReadinessView,
     FeeViewSet,
     FinancialLedgerEntryViewSet,
     NotificationViewSet,
@@ -71,6 +75,7 @@ router.register("school/report-cards", ReportCardViewSet, basename="school-repor
 router.register("school/notifications", NotificationViewSet, basename="school-notification")
 router.register("school/communication/announcements", AnnouncementViewSet, basename="school-announcement")
 router.register("school/communication/history", CommunicationMessageViewSet, basename="school-communication-history")
+router.register("school/audit", AuditLogViewSet, basename="school-audit")
 router.register("school/parent-links", SchoolParentStudentViewSet, basename="school-parent-link")
 router.register("school/timetables", TimetableEntryViewSet, basename="school-timetable")
 router.register("parent/students", ParentStudentViewSet, basename="parent-student")
@@ -81,7 +86,9 @@ router.register("parent/report-cards", ParentReportCardViewSet, basename="parent
 router.register("parent/notifications", ParentNotificationViewSet, basename="parent-notification")
 
 urlpatterns = [
-    path("auth/token/", TokenObtainPairView.as_view(), name="token-obtain-pair"),
+    path("health/", HealthView.as_view(), name="health"),
+    path("health/ready/", ReadinessView.as_view(), name="health-ready"),
+    path("auth/token/", LoginTokenObtainPairView.as_view(), name="token-obtain-pair"),
     path("auth/token/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
     path("auth/me/", CurrentUserView.as_view(), name="current-user"),
     path("school/profile/", SchoolProfileView.as_view(), name="school-profile"),

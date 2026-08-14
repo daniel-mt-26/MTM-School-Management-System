@@ -8,6 +8,7 @@ from rest_framework import serializers
 from .models import (
     AcademicResult,
     AcademicYear,
+    AuditLog,
     Announcement,
     ClassSubject,
     CommunicationMessage,
@@ -96,6 +97,8 @@ class SchoolProfileSerializer(serializers.ModelSerializer):
     def validate_logo(self, logo):
         if logo.size > self.MAX_LOGO_SIZE:
             raise serializers.ValidationError("The logo must be 2 MB or smaller.")
+        if getattr(logo, "content_type", "") and not logo.content_type.startswith("image/"):
+            raise serializers.ValidationError("Upload an image file for the school logo.")
         return logo
 
     class Meta:
@@ -774,6 +777,20 @@ class ParentNotificationSerializer(serializers.ModelSerializer):
         model = Notification
         fields = ["id", "title", "message", "student_name", "is_read", "created_at"]
         read_only_fields = ["id", "title", "message", "student_name", "created_at"]
+
+
+class AuditLogSerializer(serializers.ModelSerializer):
+    actor_name = serializers.SerializerMethodField()
+
+    def get_actor_name(self, log):
+        if not log.actor_id:
+            return "System"
+        return log.actor.get_full_name() or log.actor.username
+
+    class Meta:
+        model = AuditLog
+        fields = ["id", "actor_name", "action", "resource_type", "resource_id", "description", "created_at"]
+        read_only_fields = fields
 
 
 class SchoolParentStudentSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):

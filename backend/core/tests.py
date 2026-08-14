@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -11,6 +12,7 @@ from rest_framework.test import APITestCase
 from .models import (
     AcademicResult,
     AcademicYear,
+    AuditLog,
     ClassSubject,
     CommunicationMessage,
     Fee,
@@ -964,3 +966,43 @@ class CommunicationTests(APITestCase):
         self.client.post("/api/integrations/n8n/whatsapp/status/", {"provider_message_id": "provider-001", "status": "sent"}, format="json", HTTP_X_MTM_INTEGRATION_SECRET="test-integration-secret")
         self.assertEqual(CommunicationMessage.objects.get(pk=message.id).status, "read")
         self.assertEqual(self.client.post("/api/integrations/n8n/whatsapp/status/", {"provider_message_id": "unknown", "status": "delivered"}, format="json", HTTP_X_MTM_INTEGRATION_SECRET="test-integration-secret").data["updated"], False)
+
+
+class FinalHardeningTests(APITestCase):
+    setUp = TenantIsolationTests.setUp
+    make_user = TenantIsolationTests.make_user
+    make_school_calendar = TenantIsolationTests.make_school_calendar
+    make_student = TenantIsolationTests.make_student
+    make_private_records = TenantIsolationTests.make_private_records
+    authenticate = TenantIsolationTests.authenticate
+
+    def test_health_checks_are_public_and_non_sensitive(self):
+        self.assertEqual(self.client.get("/api/health/").data["status"], "ok")
+        self.assertEqual(self.client.get("/api/health/ready/").status_code, status.HTTP_200_OK)
+
+    def test_audit_history_is_append_only_and_tenant_scoped(self):
+        self.authenticate(self.admin_a)
+        response = self.client.patch("/api/school/profile/", {"address": "Audited address"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        log = AuditLog.objects.get(school=self.school_a, action="school_profile_updated")
+        self.assertEqual(log.actor, self.admin_a)
+        response = self.client.get("/api/school/audit/")
+        self.assertEqual([item["id"] for item in response.data], [log.id])
+        self.client.force_authenticate(user=self.admin_b)
+        self.assertEqual(self.client.get(f"/api/school/audit/{log.id}/").status_code, status.HTTP_404_NOT_FOUND)
+        self.client.force_authenticate(user=self.parent_a_user)
+        self.assertEqual(self.client.get("/api/school/audit/").status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_demo_command_is_fictional_idempotent_and_reset_requires_confirmation(self):
+        call_command("create_demo_school", password="synthetic-demo-password")
+        demo = School.objects.get(email="demo@sunrise.invalid")
+        self.assertTrue(demo.is_demo)
+        self.assertEqual(demo.students.count(), 24)
+        call_command("create_demo_school", password="synthetic-demo-password")
+        self.assertEqual(demo.students.count(), 24)
+        with self.assertRaises(Exception):
+            call_command("reset_demo_school")
+        call_command("reset_demo_school", yes=True, password="synthetic-demo-password")
+        demo.refresh_from_db()
+        self.assertTrue(demo.is_demo)
+        self.assertEqual(demo.students.count(), 24)
