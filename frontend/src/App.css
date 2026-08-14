@@ -102,7 +102,7 @@ button:disabled { cursor: wait; opacity: 0.7; }
   min-width: 0;
 }
 
-.school-logout { flex: 0 0 auto; min-height: 40px; margin: 0; padding: 8px 14px; }
+.school-logout, .parent-logout { flex: 0 0 auto; min-height: 40px; margin: 0; padding: 8px 14px; }
 
 .school-logo {
   width: 52px;
@@ -320,6 +320,8 @@ button:disabled { cursor: wait; opacity: 0.7; }
 .text-button { margin: 0; padding: 6px; background: transparent; color: #a21717; font-weight: 600; }
 .parent-link-form { display: grid; grid-template-columns: 2fr 1fr auto auto; align-items: center; gap: 10px; margin-top: 20px; padding-top: 20px; border-top: 1px solid #eef1f5; }
 .parent-link-form button { margin: 0; }
+.parent-link-form .student-picker { grid-column: 1 / -1; }
+.selected-child { grid-column: 1 / -1; margin: 0; padding: 10px 12px; border-radius: 6px; background: #f3f6fb; overflow-wrap: anywhere; }
 .parent-search { box-sizing: border-box; display: block; width: min(100%, 1100px); margin: 0 auto 18px; padding: 11px 12px; border: 1px solid #aeb9ca; border-radius: 6px; font: inherit; }
 .empty-cell { padding: 30px !important; color: #6b7280; text-align: center !important; }
 .academic-filters { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 12px; width: min(100%, 1100px); margin: 0 auto 18px; }
@@ -345,13 +347,21 @@ button:disabled { cursor: wait; opacity: 0.7; }
 .channel-options { display: flex; flex-wrap: wrap; gap: 16px; }
 .communication-confirm, .communication-notice { box-sizing: border-box; width: min(100%, 1100px); margin: 16px auto 0; padding: 14px; border-radius: 8px; background: #eff6ff; color: #1e3a5f; }
 .communication-confirm { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.student-picker { position: relative; min-width: 0; }
+.student-picker label { display: grid; gap: 7px; font-weight: 600; }
+.student-picker input { box-sizing: border-box; width: 100%; padding: 11px 12px; border: 1px solid #aeb9ca; border-radius: 6px; background: #fff; font: inherit; }
+.student-picker-results { position: absolute; z-index: 20; top: calc(100% + 2px); right: 0; left: 0; max-height: 260px; overflow-y: auto; border: 1px solid #dce3ee; border-radius: 8px; background: #fff; box-shadow: 0 10px 24px rgb(25 46 82 / 14%); }
+.student-picker-results button { display: grid; width: 100%; min-height: 48px; margin: 0; padding: 10px 12px; border-radius: 0; background: #fff; color: #1f2937; text-align: left; }
+.student-picker-results button:hover, .student-picker-results button:focus { background: #f3f6fb; outline: none; }
+.student-picker-results span, .student-picker-results p { display: block; margin: 3px 0 0; color: #6b7280; font-size: 13px; overflow-wrap: anywhere; }
+.student-picker-results p { padding: 12px; }
 
 @media (max-width: 767px) {
   .login-page { padding: 16px; }
   .login-card { padding: 24px 18px; }
   .school-header { align-items: flex-start; padding: 18px 16px; }
   .school-identity { min-width: 0; gap: 12px; }
-  .school-logout { padding: 8px 12px; }
+  .school-logout, .parent-logout { padding: 8px 12px; }
   .school-identity h1 { font-size: 19px; overflow-wrap: anywhere; }
   .school-identity p { font-size: 13px; }
   .school-logo { flex: 0 0 44px; width: 44px; height: 44px; }
@@ -383,6 +393,7 @@ button:disabled { cursor: wait; opacity: 0.7; }
   .communication-nav { flex-wrap: nowrap; max-width: 100%; overflow-x: auto; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
   .communication-nav a { flex: 0 0 auto; min-height: 40px; box-sizing: border-box; }
   .channel-options { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .student-picker-results { position: relative; max-height: 220px; margin-top: 6px; }
   .student-table th, .student-table td { padding: 12px 14px; white-space: normal; overflow-wrap: anywhere; }
   .student-table-wrap::after { content: "Swipe sideways to view all columns"; display: block; padding: 8px 12px; color: #6b7280; font-size: 12px; }
   .timetable-grid::after { content: "Swipe sideways to view the full weekly timetable"; }

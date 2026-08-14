@@ -362,6 +362,42 @@ class RecurringFeeTemplate(models.Model):
             raise ValidationError({"end_month": "End month cannot be before start month."})
 
 
+class Expense(models.Model):
+    """A school operational expense, deliberately separate from student charges."""
+
+    class Category(models.TextChoices):
+        FOOD = "food", "Food"
+        UTILITIES = "utilities", "Utilities"
+        TRANSPORT = "transport", "Transport"
+        SALARIES = "salaries", "Salaries"
+        MAINTENANCE = "maintenance", "Maintenance"
+        STATIONERY = "stationery", "Stationery"
+        RENT = "rent", "Rent"
+        EQUIPMENT = "equipment", "Equipment"
+        OTHER = "other", "Other"
+
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="expenses")
+    expense_date = models.DateField()
+    category = models.CharField(max_length=30, choices=Category.choices)
+    description = models.CharField(max_length=255)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))])
+    currency = models.CharField(max_length=3)
+    payment_method = models.CharField(max_length=30)
+    reference = models.CharField(max_length=100, blank=True)
+    notes = models.TextField(blank=True)
+    recorded_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="recorded_expenses")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["school", "expense_date"])]
+        ordering = ["-expense_date", "-id"]
+
+    def clean(self):
+        if self.school_id and self.currency != self.school.default_currency:
+            raise ValidationError({"currency": "Expenses must use the school's default currency."})
+
+
 class AcademicResult(models.Model):
     student_enrollment = models.ForeignKey(StudentEnrollment, on_delete=models.PROTECT, related_name="results")
     term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="results")

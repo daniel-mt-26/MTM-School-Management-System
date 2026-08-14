@@ -6,6 +6,8 @@ export const getFinanceRecords = (resource, params) => apiClient(`/school/${reso
 export const saveFinanceRecord = (resource, data, id) => apiClient(`/school/${resource}/${id ? `${id}/` : ''}`, { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
 export const assignFeeToClass = (data) => apiClient('/school/fee-assignments/assign-to-class/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
 export const getBalances = (params) => apiClient(`/school/finance/balances/${queryString(params)}`)
+export const getLedgerTotals = (params) => apiClient(`/school/ledger/totals/${queryString(params)}`)
+export const getDailyCashbook = (date) => apiClient(`/school/finance/cashbook/${queryString({ date })}`)
 export const getStudentFinance = (studentId) => apiClient(`/school/finance/students/${studentId}/`)
 export const getParentStudentFinance = (studentId) => apiClient(`/parent/students/${studentId}/finance/`)
 export const reversePayment = (paymentId, reason) => apiClient(`/school/payments/${paymentId}/reverse/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) })

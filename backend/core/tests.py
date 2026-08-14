@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -15,6 +15,7 @@ from .models import (
     AuditLog,
     ClassSubject,
     CommunicationMessage,
+    Expense,
     Fee,
     FinancialLedgerEntry,
     Notification,
@@ -262,13 +263,14 @@ class TenantIsolationTests(APITestCase):
         self.assertNotIn(other_alice.id, [item["id"] for item in response.data["students"]])
         self.assertNotIn("school_id", response.data["students"][0])
 
-    def test_school_search_returns_only_own_classes(self):
+    def test_school_search_returns_usable_student_ids_and_no_classes(self):
         self.authenticate(self.admin_a)
 
-        response = self.client.get("/api/school/search/", {"q": "Grade"})
+        response = self.client.get("/api/school/search/", {"q": "Alice"})
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["classes"], [{"id": self.class_a.id, "name": self.class_a.name}])
+        self.assertEqual(response.data["students"][0]["id"], self.student_a.id)
+        self.assertNotIn("classes", response.data)
 
     def test_school_search_scopes_parent_results_through_own_students(self):
         self.parent_a_user.first_name = "Shared"
@@ -300,7 +302,7 @@ class TenantIsolationTests(APITestCase):
 
     def test_school_search_short_and_empty_queries_are_safe(self):
         self.authenticate(self.admin_a)
-        empty_results = {"students": [], "parents": [], "classes": []}
+        empty_results = {"students": [], "parents": []}
 
         for query in ("", " ", "A", " A "):
             response = self.client.get("/api/school/search/", {"q": query})
@@ -349,10 +351,14 @@ class TenantIsolationTests(APITestCase):
         search = self.client.get("/api/school/students/", {"q": "Ali", "school_id": self.school_b.id})
         self.assertEqual([item["id"] for item in search.data], [self.student_a.id])
         self.assertNotIn("school_id", search.data[0])
+        full_name_search = self.client.get("/api/school/students/", {"q": "Alice Learner"})
+        self.assertEqual([item["id"] for item in full_name_search.data], [self.student_a.id])
 
         class_filter = self.client.get("/api/school/students/", {"school_class": other_class_a.id})
         self.assertEqual(len(class_filter.data), 1)
         self.assertEqual(class_filter.data[0]["class_name"], "Grade 3A")
+        combined = self.client.get("/api/school/students/", {"q": "Apr", "school_class": other_class_a.id})
+        self.assertEqual([item["id"] for item in combined.data], [class_filter.data[0]["id"]])
         cross_tenant_class = self.client.get("/api/school/students/", {"school_class": self.class_b.id})
         self.assertEqual(cross_tenant_class.data, [])
 
@@ -837,6 +843,83 @@ class TenantIsolationTests(APITestCase):
         self.assertEqual(response.data["role"], User.Role.SCHOOL_ADMIN)
 
 
+class FinanceExpansionTests(APITestCase):
+    setUp = TenantIsolationTests.setUp
+    make_user = TenantIsolationTests.make_user
+    make_school_calendar = TenantIsolationTests.make_school_calendar
+    make_student = TenantIsolationTests.make_student
+    make_private_records = TenantIsolationTests.make_private_records
+    authenticate = TenantIsolationTests.authenticate
+
+    def test_expense_creation_currency_and_tenant_boundaries(self):
+        self.authenticate(self.admin_a)
+        response = self.client.post("/api/school/expenses/", {
+            "school_id": self.school_b.id,
+            "expense_date": "2026-02-10",
+            "category": "stationery",
+            "description": "Exercise books",
+            "amount": "42.50",
+            "currency": "ZAR",
+            "payment_method": "cash",
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        expense = Expense.objects.get(pk=response.data["id"])
+        self.assertEqual(expense.school, self.school_a)
+        self.assertEqual(expense.currency, self.school_a.default_currency)
+        other_expense = Expense.objects.create(school=self.school_b, expense_date=date(2026, 2, 10), category="utilities", description="School B electricity", amount=Decimal("80.00"), currency="USD", payment_method="bank", recorded_by=self.admin_b)
+        self.assertNotIn(other_expense.id, [item["id"] for item in self.client.get("/api/school/expenses/").data])
+        self.assertEqual(self.client.get(f"/api/school/expenses/{other_expense.id}/").status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(self.client.patch(f"/api/school/expenses/{other_expense.id}/", {"description": "Attack"}, format="json").status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_cashbook_uses_valid_payments_and_expenses_not_fee_charges(self):
+        cashbook_date = date(2026, 2, 10)
+        self.payment_a.paid_at = timezone.make_aware(datetime(2026, 2, 10, 9, 0))
+        self.payment_a.save(update_fields=["paid_at"])
+        Expense.objects.create(school=self.school_a, expense_date=cashbook_date, category="food", description="Lunch supplies", amount=Decimal("8.00"), currency="USD", payment_method="cash", recorded_by=self.admin_a)
+        Expense.objects.create(school=self.school_b, expense_date=cashbook_date, category="food", description="Other school", amount=Decimal("99.00"), currency="USD", payment_method="cash", recorded_by=self.admin_b)
+        self.authenticate(self.admin_a)
+        response = self.client.get("/api/school/finance/cashbook/", {"date": "2026-02-10", "school_id": self.school_b.id})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(Decimal(response.data["total_income"]), Decimal("25.00"))
+        self.assertEqual(Decimal(response.data["total_expenses"]), Decimal("8.00"))
+        self.assertEqual(Decimal(response.data["net_cash_movement"]), Decimal("17.00"))
+        self.payment_a.is_reversed = True
+        self.payment_a.save(update_fields=["is_reversed"])
+        reversed_response = self.client.get("/api/school/finance/cashbook/", {"date": "2026-02-10"})
+        self.assertEqual(Decimal(reversed_response.data["total_income"]), Decimal("0.00"))
+
+    def test_ledger_totals_are_calculated_by_django(self):
+        occurred_at = timezone.make_aware(datetime(2026, 2, 11, 10, 0))
+        FinancialLedgerEntry.objects.create(student=self.student_a, entry_type="charge", amount=Decimal("100.00"), currency="USD", occurred_at=occurred_at, description="Test charge", fee_assignment=self.assignment_a)
+        FinancialLedgerEntry.objects.create(student=self.student_a, entry_type="payment", amount=Decimal("25.00"), currency="USD", occurred_at=occurred_at, description="Test payment", fee_assignment=self.assignment_a, payment=self.payment_a)
+        self.authenticate(self.admin_a)
+        response = self.client.get("/api/school/ledger/totals/", {"student": self.student_a.id, "start_date": "2026-02-11", "end_date": "2026-02-11"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(Decimal(response.data["total_charges"]), Decimal("100.00"))
+        self.assertEqual(Decimal(response.data["total_payments"]), Decimal("25.00"))
+        self.assertEqual(Decimal(response.data["closing_balance"]), Decimal("75.00"))
+
+    def test_expenses_cashbook_and_branded_receipts_are_private(self):
+        self.school_a.address = "1 Alpha Road"
+        self.school_a.logo.save("school.gif", SimpleUploadedFile("school.gif", b"GIF87a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;", content_type="image/gif"), save=False)
+        self.school_a.save(update_fields=["address", "logo"])
+        self.addCleanup(self.school_a.logo.storage.delete, self.school_a.logo.name)
+        self.authenticate(self.admin_a)
+        pdf = self.client.get(f"/api/school/receipts/{self.receipt_a.id}/pdf/")
+        self.assertEqual(pdf.status_code, status.HTTP_200_OK)
+        self.assertIn(b"School A", pdf.content)
+        self.assertIn(b"1 Alpha Road", pdf.content)
+        self.assertIn(b"a@example.test", pdf.content)
+        self.assertIn(b"PAYMENT RECEIPT", pdf.content)
+        self.assertIn(b"/Subtype /Image", pdf.content)
+        self.authenticate(self.parent_a_user)
+        self.assertEqual(self.client.get("/api/school/expenses/").status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(self.client.get("/api/school/finance/cashbook/").status_code, status.HTTP_403_FORBIDDEN)
+        self.authenticate(self.platform_admin)
+        self.assertEqual(self.client.get("/api/school/expenses/").status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(self.client.get("/api/school/finance/cashbook/").status_code, status.HTTP_403_FORBIDDEN)
+
+
 class CommunicationTests(APITestCase):
     # Reuse the two-school fixture without inheriting the pre-existing tests.
     setUp = TenantIsolationTests.setUp
@@ -994,15 +1077,21 @@ class FinalHardeningTests(APITestCase):
         self.assertEqual(self.client.get("/api/school/audit/").status_code, status.HTTP_403_FORBIDDEN)
 
     def test_demo_command_is_fictional_idempotent_and_reset_requires_confirmation(self):
-        call_command("create_demo_school", password="synthetic-demo-password")
+        call_command("create_demo_school", password="synthetic-demo-password", parent_password="synthetic-parent-password")
         demo = School.objects.get(email="demo@sunrise.invalid")
         self.assertTrue(demo.is_demo)
         self.assertEqual(demo.students.count(), 24)
-        call_command("create_demo_school", password="synthetic-demo-password")
+        self.assertTrue(demo.students.filter(first_name="Daniel", last_name="Grey").exists())
+        demo_parent = Parent.objects.get(school=demo, user__username="demo.parent")
+        self.assertEqual(demo_parent.student_links.count(), 2)
+        self.assertTrue(demo_parent.user.check_password("synthetic-parent-password"))
+        self.assertTrue(Expense.objects.filter(school=demo).count() >= 5)
+        call_command("create_demo_school", password="synthetic-demo-password", parent_password="synthetic-parent-password")
         self.assertEqual(demo.students.count(), 24)
         with self.assertRaises(Exception):
             call_command("reset_demo_school")
-        call_command("reset_demo_school", yes=True, password="synthetic-demo-password")
+        call_command("reset_demo_school", yes=True, password="synthetic-demo-password", parent_password="synthetic-parent-password")
         demo.refresh_from_db()
         self.assertTrue(demo.is_demo)
         self.assertEqual(demo.students.count(), 24)
+        self.assertEqual(Parent.objects.get(school=demo, user__username="demo.parent").student_links.count(), 2)

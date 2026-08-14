@@ -10,6 +10,8 @@ from django.db.models import Prefetch, Q
 from django.http import FileResponse, Http404
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from django.utils.dateparse import parse_date
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import MethodNotAllowed, PermissionDenied, ValidationError
@@ -26,6 +28,7 @@ from .models import (
     Announcement,
     ClassSubject,
     CommunicationMessage,
+    Expense,
     Fee,
     FinancialLedgerEntry,
     Notification,
@@ -68,6 +71,7 @@ from .serializers import (
     CommunicationMessageSerializer,
     CurrentUserSerializer,
     FeeSerializer,
+    ExpenseSerializer,
     FinancialLedgerEntrySerializer,
     NotificationSerializer,
     ParentPaymentSerializer,
@@ -112,19 +116,89 @@ class LoginTokenObtainPairView(TokenObtainPairView):
 
 
 def receipt_pdf_response(receipt):
-    """A dependency-free, server-generated single-page PDF receipt."""
+    """A server-generated, school-branded single-page PDF receipt."""
     payment = receipt.payment
     assignment = payment.student_fee_assignment
     student = assignment.student
     school = student.school
-    lines = [school.name, f"Receipt: {receipt.receipt_number}", f"Student: {student.first_name} {student.last_name}", f"Admission: {student.admission_number}", f"Fee: {assignment.fee.name}", f"Amount: {payment.currency} {payment.amount}", f"Paid: {payment.paid_at:%Y-%m-%d %H:%M}", f"Method: {payment.method}", f"Reference: {payment.reference or '-'}", f"Recorded: {payment.created_at:%Y-%m-%d %H:%M}", "STATUS: REVERSED" if receipt.is_reversed else "STATUS: PAID"]
-    escaped = [line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") for line in lines]
-    stream = "BT /F1 12 Tf 50 760 Td " + " ".join(f"({line}) Tj 0 -22 Td" for line in escaped) + " ET"
-    objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>", f"<< /Length {len(stream.encode('latin-1'))} >>\nstream\n{stream}\nendstream", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
-    pdf = "%PDF-1.4\n"; offsets = [0]
-    for index, obj in enumerate(objects, 1): offsets.append(len(pdf.encode("latin-1"))); pdf += f"{index} 0 obj\n{obj}\nendobj\n"
-    start = len(pdf.encode("latin-1")); pdf += f"xref\n0 {len(objects)+1}\n0000000000 65535 f \n" + "".join(f"{offset:010d} 00000 n \n" for offset in offsets[1:]) + f"trailer << /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF"
-    response = HttpResponse(pdf.encode("latin-1"), content_type="application/pdf")
+    _, _, outstanding = assignment_totals(assignment)
+
+    def escape(value):
+        return str(value).replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)").encode("latin-1", "replace").decode("latin-1")
+
+    logo_data = None
+    logo_size = None
+    if school.logo:
+        try:
+            from io import BytesIO
+            from PIL import Image
+
+            school.logo.open("rb")
+            image = Image.open(school.logo).convert("RGB")
+            image.thumbnail((120, 120))
+            logo_size = image.size
+            output = BytesIO()
+            image.save(output, format="JPEG", quality=85)
+            logo_data = output.getvalue()
+            school.logo.close()
+        except Exception:
+            # A receipt must remain downloadable if a previously uploaded logo
+            # becomes unavailable or cannot be decoded by the storage backend.
+            logo_data = None
+            logo_size = None
+
+    details = [
+        "PAYMENT RECEIPT",
+        f"Receipt number: {receipt.receipt_number}",
+        f"Payment date: {payment.paid_at:%Y-%m-%d %H:%M}",
+        f"Student: {student.first_name} {student.last_name}",
+        f"Admission number: {student.admission_number}",
+        f"Class: {student.school_class.name}",
+        f"Fee / Charge: {assignment.fee.name}",
+        f"Amount paid: {payment.currency} {payment.amount}",
+        f"Currency: {payment.currency}",
+        f"Payment method: {payment.method}",
+        f"Reference: {payment.reference or '-'}",
+        f"Recorded date: {payment.created_at:%Y-%m-%d %H:%M}",
+        f"Outstanding balance: {payment.currency} {outstanding}",
+        "STATUS: REVERSED" if receipt.is_reversed else "STATUS: PAID",
+    ]
+    identity = [school.name, school.address.replace("\n", ", ") or "", f"Phone: {school.phone_number}", f"Email: {school.email}"]
+    commands = ["BT", "/F1 18 Tf", "50 748 Td", f"({escape(identity[0])}) Tj", "/F1 10 Tf"]
+    for line in identity[1:]:
+        if line:
+            commands.extend(["0 -16 Td", f"({escape(line[:100])}) Tj"])
+    commands.extend(["0 -34 Td", "/F1 15 Tf", f"({escape(details[0])}) Tj", "/F1 10 Tf"])
+    for line in details[1:]:
+        commands.extend(["0 -19 Td", f"({escape(line[:110])}) Tj"])
+    commands.append("ET")
+    if logo_data and logo_size:
+        width, height = logo_size
+        rendered_height = max(1, round(120 * height / width))
+        commands.insert(0, f"q 120 0 0 {rendered_height} 442 650 cm /Im1 Do Q")
+    stream = "\n".join(commands).encode("latin-1")
+    resources = "<< /Font << /F1 5 0 R >>"
+    if logo_data:
+        resources += " /XObject << /Im1 6 0 R >>"
+    resources += " >>"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources {resources} /Contents 4 0 R >>".encode("latin-1"),
+        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    if logo_data and logo_size:
+        width, height = logo_size
+        objects.append(f"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {len(logo_data)} >>\nstream\n".encode("ascii") + logo_data + b"\nendstream")
+    pdf = b"%PDF-1.4\n"
+    offsets = [0]
+    for index, obj in enumerate(objects, 1):
+        offsets.append(len(pdf))
+        pdf += f"{index} 0 obj\n".encode("ascii") + obj + b"\nendobj\n"
+    start = len(pdf)
+    pdf += f"xref\n0 {len(objects)+1}\n0000000000 65535 f \n".encode("ascii") + b"".join(f"{offset:010d} 00000 n \n".encode("ascii") for offset in offsets[1:]) + f"trailer << /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF".encode("ascii")
+    response = HttpResponse(pdf, content_type="application/pdf")
     response["Content-Disposition"] = f'attachment; filename="receipt-{receipt.receipt_number}.pdf"'
     return response
 
@@ -156,7 +230,7 @@ class SchoolSearchView(APIView):
 
     def get(self, request):
         query = request.query_params.get("q", "").strip()
-        empty_results = {"students": [], "parents": [], "classes": []}
+        empty_results = {"students": [], "parents": []}
         if len(query) < 2:
             return Response(empty_results)
 
@@ -172,7 +246,7 @@ class SchoolSearchView(APIView):
             .order_by("last_name", "first_name", "id")[: self.result_limit]
         )
         parents = (
-            Parent.objects.filter(school=school)
+            Parent.objects.filter(student_links__student__school=school)
             .filter(
                 Q(user__first_name__icontains=query)
                 | Q(user__last_name__icontains=query)
@@ -183,11 +257,6 @@ class SchoolSearchView(APIView):
             .distinct()
             .order_by("user__last_name", "user__first_name", "id")[: self.result_limit]
         )
-        classes = (
-            SchoolClass.objects.filter(school=school, name__icontains=query)
-            .order_by("name", "id")[: self.result_limit]
-        )
-
         return Response({
             "students": [
                 {
@@ -207,7 +276,6 @@ class SchoolSearchView(APIView):
                 }
                 for parent in parents
             ],
-            "classes": [{"id": school_class.id, "name": school_class.name} for school_class in classes],
         })
 
 
@@ -507,11 +575,12 @@ class StudentViewSet(SchoolAdminViewSet):
         )
         query = self.request.query_params.get("q", "").strip()
         if query:
-            queryset = queryset.filter(
-                Q(first_name__icontains=query)
-                | Q(last_name__icontains=query)
-                | Q(admission_number__icontains=query)
-            )
+            for term in query.split():
+                queryset = queryset.filter(
+                    Q(first_name__icontains=term)
+                    | Q(last_name__icontains=term)
+                    | Q(admission_number__icontains=term)
+                )
         class_id = self.request.query_params.get("school_class")
         if class_id:
             queryset = queryset.filter(school_class_id=class_id)
@@ -779,6 +848,37 @@ class FeeViewSet(SchoolAdminViewSet):
         return super().destroy(request, *args, **kwargs)
 
 
+class ExpenseViewSet(SchoolAdminViewSet):
+    queryset = Expense.objects.all()
+    serializer_class = ExpenseSerializer
+    school_lookup = "school"
+
+    def get_queryset(self):
+        queryset = super().get_queryset().select_related("recorded_by")
+        if category := self.request.query_params.get("category"):
+            queryset = queryset.filter(category=category)
+        if query := self.request.query_params.get("q", "").strip():
+            queryset = queryset.filter(Q(description__icontains=query) | Q(reference__icontains=query) | Q(notes__icontains=query))
+        for param, lookup in (("start_date", "expense_date__gte"), ("end_date", "expense_date__lte")):
+            if value := self.request.query_params.get(param):
+                parsed = parse_date(value)
+                if not parsed:
+                    raise ValidationError({param: "Use a valid YYYY-MM-DD date."})
+                queryset = queryset.filter(**{lookup: parsed})
+        return queryset
+
+    def perform_create(self, serializer):
+        expense = serializer.save(school=self.get_school(), currency=self.get_school().default_currency, recorded_by=self.request.user)
+        log_action(school=expense.school, actor=self.request.user, action="expense_recorded", resource=expense, description=f"Expense recorded: {expense.description}")
+
+    def perform_update(self, serializer):
+        expense = serializer.save()
+        log_action(school=expense.school, actor=self.request.user, action="expense_updated", resource=expense, description=f"Expense updated: {expense.description}")
+
+    def destroy(self, request, *args, **kwargs):
+        raise MethodNotAllowed("DELETE")
+
+
 class StudentFeeAssignmentViewSet(SchoolAdminViewSet):
     queryset = StudentFeeAssignment.objects.all()
     serializer_class = StudentFeeAssignmentSerializer
@@ -870,11 +970,45 @@ class FinancialLedgerEntryViewSet(SchoolScopedQuerysetMixin, mixins.ListModelMix
     school_lookup = "student__school_class__school"
     permission_classes = [IsSchoolAdministrator]
 
-    def get_queryset(self):
+    def base_queryset(self):
         queryset = super().get_queryset().select_related("student", "fee_assignment", "payment")
         if student := self.request.query_params.get("student"):
             queryset = queryset.filter(student_id=student)
+        if school_class := self.request.query_params.get("school_class"):
+            queryset = queryset.filter(student__school_class_id=school_class)
+        return queryset
+
+    def get_queryset(self):
+        queryset = self.base_queryset()
+        for param, lookup in (("start_date", "occurred_at__date__gte"), ("end_date", "occurred_at__date__lte")):
+            if value := self.request.query_params.get(param):
+                parsed = parse_date(value)
+                if not parsed:
+                    raise ValidationError({param: "Use a valid YYYY-MM-DD date."})
+                queryset = queryset.filter(**{lookup: parsed})
         return queryset.order_by("occurred_at", "id")
+
+    @action(detail=False, methods=["get"])
+    def totals(self, request):
+        entries = self.get_queryset()
+        total_debits = sum((entry.amount for entry in entries if entry.entry_type == FinancialLedgerEntry.EntryType.CHARGE), Decimal("0.00"))
+        total_credits = sum((entry.amount for entry in entries if entry.entry_type == FinancialLedgerEntry.EntryType.PAYMENT), Decimal("0.00"))
+        closing_entries = self.base_queryset()
+        if end_date := request.query_params.get("end_date"):
+            parsed = parse_date(end_date)
+            if not parsed:
+                raise ValidationError({"end_date": "Use a valid YYYY-MM-DD date."})
+            closing_entries = closing_entries.filter(occurred_at__date__lte=parsed)
+        closing_balance = sum(
+            (entry.amount if entry.entry_type == FinancialLedgerEntry.EntryType.CHARGE else -entry.amount if entry.entry_type == FinancialLedgerEntry.EntryType.PAYMENT else Decimal("0.00"))
+            for entry in closing_entries
+        )
+        return Response({
+            "currency": self.get_school().default_currency,
+            "total_charges": total_debits,
+            "total_payments": total_credits,
+            "closing_balance": closing_balance,
+        })
 
 
 class ReceiptViewSet(SchoolScopedQuerysetMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
@@ -959,6 +1093,48 @@ class SchoolFinanceBalancesView(APIView):
             charges, payments, balance = student_totals(student)
             rows.append({"id": student.id, "display_name": f"{student.first_name} {student.last_name}".strip(), "admission_number": student.admission_number, "class_name": student.school_class.name, "currency": school.default_currency, "total_charges": charges, "total_payments": payments, "outstanding_balance": balance})
         return Response(rows)
+
+
+class SchoolDailyCashbookView(APIView):
+    """Authoritative daily cash movement for the authenticated school only."""
+
+    permission_classes = [IsSchoolAdministrator]
+
+    def get(self, request):
+        selected_date = parse_date(request.query_params.get("date", "")) if request.query_params.get("date") else timezone.localdate()
+        if not selected_date:
+            raise ValidationError({"date": "Use a valid YYYY-MM-DD date."})
+        school = request.user.school_administrator.school
+        payments = Payment.objects.filter(
+            student_fee_assignment__student__school=school,
+            is_reversed=False,
+            paid_at__date=selected_date,
+        ).select_related("student_fee_assignment__student__school_class", "student_fee_assignment__fee").order_by("paid_at", "id")
+        expenses = Expense.objects.filter(school=school, expense_date=selected_date).select_related("recorded_by")
+        income_total = sum((payment.amount for payment in payments), Decimal("0.00"))
+        expense_total = sum((expense.amount for expense in expenses), Decimal("0.00"))
+        return Response({
+            "date": selected_date,
+            "currency": school.default_currency,
+            "total_income": income_total,
+            "total_expenses": expense_total,
+            "net_cash_movement": income_total - expense_total,
+            "income": [
+                {
+                    "id": payment.id,
+                    "paid_at": payment.paid_at,
+                    "student_name": f"{payment.student_fee_assignment.student.first_name} {payment.student_fee_assignment.student.last_name}".strip(),
+                    "admission_number": payment.student_fee_assignment.student.admission_number,
+                    "fee_name": payment.student_fee_assignment.fee.name,
+                    "amount": payment.amount,
+                    "currency": payment.currency,
+                    "payment_method": payment.method,
+                    "reference": payment.reference,
+                }
+                for payment in payments
+            ],
+            "expenses": ExpenseSerializer(expenses, many=True, context={"school": school}).data,
+        })
 
 
 class SchoolStudentFinanceView(APIView):

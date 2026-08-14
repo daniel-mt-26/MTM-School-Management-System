@@ -11,7 +11,8 @@ import {
   updateCommunicationSettings,
 } from '../api/communication'
 import { getParents } from '../api/parents'
-import { getSchoolClasses, getStudents } from '../api/students'
+import { getSchoolClasses } from '../api/students'
+import StudentPicker from '../components/StudentPicker'
 
 const navigation = [['announcements', 'Announcements'], ['fee-reminders', 'Fee Reminders'], ['history', 'History'], ['settings', 'Settings']]
 const initialAnnouncement = { title: '', message: '', audience: 'all_parents', school_class: '', student: '', parent: '', channels: ['in_app'] }
@@ -22,21 +23,21 @@ export default function CommunicationPage() {
   const [announcements, setAnnouncements] = useState([])
   const [history, setHistory] = useState([])
   const [classes, setClasses] = useState([])
-  const [students, setStudents] = useState([])
   const [parents, setParents] = useState([])
   const [form, setForm] = useState(initialAnnouncement)
   const [draft, setDraft] = useState(null)
+  const [selectedAnnouncementStudent, setSelectedAnnouncementStudent] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
   useEffect(() => {
     let active = true
-    Promise.all([getCommunicationSettings(), getAnnouncements(), getCommunicationHistory(), getSchoolClasses(), getStudents(), getParents()])
-      .then(([nextSettings, nextAnnouncements, nextHistory, nextClasses, nextStudents, nextParents]) => {
+    Promise.all([getCommunicationSettings(), getAnnouncements(), getCommunicationHistory(), getSchoolClasses(), getParents()])
+      .then(([nextSettings, nextAnnouncements, nextHistory, nextClasses, nextParents]) => {
         if (!active) return
         setSettings(nextSettings); setAnnouncements(nextAnnouncements); setHistory(nextHistory)
-        setClasses(nextClasses); setStudents(nextStudents); setParents(nextParents)
+        setClasses(nextClasses); setParents(nextParents)
       })
       .catch(() => active && setError('We could not load communication data. Please try again.'))
       .finally(() => active && setLoading(false))
@@ -66,7 +67,7 @@ export default function CommunicationPage() {
     try {
       const sent = await sendAnnouncement(draft.id)
       setAnnouncements((items) => items.map((item) => item.id === sent.id ? { ...item, ...sent } : item))
-      setForm(initialAnnouncement); setDraft(null); setNotice(`Announcement sent to ${sent.recipient_count} parent${sent.recipient_count === 1 ? '' : 's'}.`); reloadHistory()
+      setForm(initialAnnouncement); setSelectedAnnouncementStudent(null); setDraft(null); setNotice(`Announcement sent to ${sent.recipient_count} parent${sent.recipient_count === 1 ? '' : 's'}.`); reloadHistory()
     } catch { setError('The announcement could not be sent.') }
   }
 
@@ -83,7 +84,7 @@ export default function CommunicationPage() {
   return <main className="student-page"><header className="student-page-header"><div><Link to="/school" className="dashboard-link">← Back to School Dashboard</Link><h1>Communication</h1><p>Parent notifications and delivery history. WhatsApp is queued only for eligible opt-in contacts.</p></div></header>
     <nav className="communication-nav">{navigation.map(([key, label]) => <Link key={key} className={section === key ? 'active' : ''} to={`/school/communication/${key}`}>{label}</Link>)}</nav>
     {error && <p className="form-error" role="alert">{error}</p>}{notice && <p className="communication-notice">{notice}</p>}
-    {section === 'announcements' && <><section className="profile-section"><h2>Create announcement</h2><form className="student-form communication-form" onSubmit={saveDraft}><label>Title<input required name="title" value={form.title} onChange={setField} /></label><label>Message<textarea required name="message" value={form.message} onChange={setField} /></label><label>Audience<select name="audience" value={form.audience} onChange={setField}><option value="all_parents">All Parents</option><option value="class">Specific Class</option><option value="student">Specific Student</option><option value="parent">Specific Parent</option></select></label>{form.audience === 'class' && <label>Class<select required name="school_class" value={form.school_class} onChange={setField}><option value="">Choose a class</option>{classes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}{form.audience === 'student' && <label>Student<select required name="student" value={form.student} onChange={setField}><option value="">Choose a student</option>{students.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label>}{form.audience === 'parent' && <label>Parent<select required name="parent" value={form.parent} onChange={setField}><option value="">Choose a parent</option>{parents.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label>}<div className="channel-options"><label className="checkbox-label"><input type="checkbox" checked={form.channels.includes('in_app')} onChange={() => toggleChannel('in_app')} /> In-app notification</label><label className="checkbox-label"><input type="checkbox" checked={form.channels.includes('whatsapp')} onChange={() => toggleChannel('whatsapp')} /> WhatsApp (eligible opt-ins only)</label></div><button disabled={!form.channels.length} type="submit">Save draft and preview recipients</button></form>{draft && <div className="communication-confirm"><strong>Ready to send to {draft.recipient_count} parent{draft.recipient_count === 1 ? '' : 's'}?</strong><button onClick={confirmSend}>Confirm and send</button></div>}</section><section className="profile-section"><h2>Announcement history</h2><HistoryTable rows={announcements} /></section></>}
+    {section === 'announcements' && <><section className="profile-section"><h2>Create announcement</h2><form className="student-form communication-form" onSubmit={saveDraft}><label>Title<input required name="title" value={form.title} onChange={setField} /></label><label>Message<textarea required name="message" value={form.message} onChange={setField} /></label><label>Audience<select name="audience" value={form.audience} onChange={setField}><option value="all_parents">All Parents</option><option value="class">Specific Class</option><option value="student">Specific Student</option><option value="parent">Specific Parent</option></select></label>{form.audience === 'class' && <label>Class<select required name="school_class" value={form.school_class} onChange={setField}><option value="">Choose a class</option>{classes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}{form.audience === 'student' && <StudentPicker selected={selectedAnnouncementStudent} onChange={(student) => { setSelectedAnnouncementStudent(student); setForm((current) => ({ ...current, student: student ? String(student.id) : '' })) }} required />}{form.audience === 'parent' && <label>Parent<select required name="parent" value={form.parent} onChange={setField}><option value="">Choose a parent</option>{parents.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label>}<div className="channel-options"><label className="checkbox-label"><input type="checkbox" checked={form.channels.includes('in_app')} onChange={() => toggleChannel('in_app')} /> In-app notification</label><label className="checkbox-label"><input type="checkbox" checked={form.channels.includes('whatsapp')} onChange={() => toggleChannel('whatsapp')} /> WhatsApp (eligible opt-ins only)</label></div><button disabled={!form.channels.length} type="submit">Save draft and preview recipients</button></form>{draft && <div className="communication-confirm"><strong>Ready to send to {draft.recipient_count} parent{draft.recipient_count === 1 ? '' : 's'}?</strong><button onClick={confirmSend}>Confirm and send</button></div>}</section><section className="profile-section"><h2>Announcement history</h2><HistoryTable rows={announcements} /></section></>}
     {section === 'fee-reminders' && <section className="profile-section"><h2>Fee reminders</h2><p className="muted-copy">MTM calculates outstanding balances and eligible recipients before creating local notifications and WhatsApp outbox jobs.</p><button onClick={generateReminders}>Generate reminders for eligible accounts</button></section>}
     {section === 'history' && <section className="profile-section"><h2>Communication history</h2><HistoryTable rows={history} detailed /></section>}
     {section === 'settings' && settings && <section className="profile-section"><h2>WhatsApp and notification settings</h2><p className="muted-copy">WhatsApp integration: {settings.integration_available ? 'Server integration credential configured' : 'Not configured'}. No provider credentials are shown here.</p><form className="student-form communication-form" onSubmit={saveSettings}>{[['whatsapp_enabled', 'Enable WhatsApp communication'], ['payment_receipt_notifications_enabled', 'Payment receipt notifications'], ['fee_reminders_enabled', 'Fee reminder notifications'], ['report_card_notifications_enabled', 'Report-card notifications'], ['whatsapp_announcements_enabled', 'WhatsApp announcements']].map(([key, label]) => <label key={key} className="checkbox-label"><input type="checkbox" checked={settings[key]} onChange={(event) => setSettings((current) => ({ ...current, [key]: event.target.checked }))} /> {label}</label>)}<button type="submit">Save settings</button></form></section>}

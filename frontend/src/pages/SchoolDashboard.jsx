@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { AuthContext } from '../auth/context'
 import { getSchoolProfile, searchSchool } from '../api/school'
 
-const EMPTY_RESULTS = { students: [], parents: [], classes: [] }
+const EMPTY_RESULTS = { students: [], parents: [] }
 
 function getInitials(name) {
   return name
@@ -118,8 +118,8 @@ function SchoolDashboard() {
         <section className="dashboard-search">
           <input
             type="search"
-            placeholder="Search students, parents, records..."
-            aria-label="Search students, parents and records"
+            placeholder="Search students or parents..."
+            aria-label="Search students and parents"
             value={query}
             onChange={changeQuery}
           />
@@ -130,20 +130,17 @@ function SchoolDashboard() {
               {!searching && !searchError && (
                 <>
                   {results.students.length > 0 && (
-                    <SearchGroup title="Students" items={results.students} path="/school/students" renderItem={(item) => (
+                    <SearchGroup title="Students" items={results.students} destination={(item) => `/school/students/${item.id}`} renderItem={(item) => (
                       <><strong>{item.display_name}</strong><span>{item.admission_number} · {item.class_name}</span></>
                     )} />
                   )}
                   {results.parents.length > 0 && (
-                    <SearchGroup title="Parents" items={results.parents} path="/school/parents" renderItem={(item) => (
+                    <SearchGroup title="Parents" items={results.parents} destination={(item) => `/school/parents/${item.id}`} renderItem={(item) => (
                       <><strong>{item.display_name}</strong><span>{item.phone}</span></>
                     )} />
                   )}
-                  {results.classes.length > 0 && (
-                    <SearchGroup title="Classes" items={results.classes} path="/school/academics" renderItem={(item) => <strong>{item.name}</strong>} />
-                  )}
-                  {results.students.length === 0 && results.parents.length === 0 && results.classes.length === 0 && (
-                    <p className="search-status">No matching students, parents, or classes.</p>
+                  {results.students.length === 0 && results.parents.length === 0 && (
+                    <p className="search-status">No matching students or parents.</p>
                   )}
                 </>
               )}
@@ -187,11 +184,11 @@ function SchoolDashboard() {
   );
 }
 
-function SearchGroup({ title, items, path, renderItem }) {
+function SearchGroup({ title, items, destination, renderItem }) {
   return (
     <section className="search-group">
       <h2>{title}</h2>
-      {items.map((item) => <Link key={item.id} to={path}>{renderItem(item)}</Link>)}
+      {items.map((item) => <Link key={item.id} to={destination(item)}>{renderItem(item)}</Link>)}
     </section>
   )
 }

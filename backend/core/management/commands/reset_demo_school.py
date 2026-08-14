@@ -8,6 +8,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--yes", action="store_true", help="Required confirmation.")
         parser.add_argument("--password", help="Optional replacement demo admin password.")
+        parser.add_argument("--parent-password", help="Optional replacement demo parent password.")
 
     def handle(self, *args, **options):
         arguments = ["--reset"]
@@ -15,4 +16,6 @@ class Command(BaseCommand):
             arguments.append("--yes")
         if options.get("password"):
             arguments.extend(["--password", options["password"]])
+        if options.get("parent_password"):
+            arguments.extend(["--parent-password", options["parent_password"]])
         call_command("create_demo_school", *arguments)

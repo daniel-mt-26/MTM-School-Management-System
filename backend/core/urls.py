@@ -15,6 +15,7 @@ from .views import (
     HealthView,
     ReadinessView,
     FeeViewSet,
+    ExpenseViewSet,
     FinancialLedgerEntryViewSet,
     NotificationViewSet,
     N8NOutboxAttachmentView,
@@ -44,6 +45,7 @@ from .views import (
     SchoolProfileView,
     SchoolSearchView,
     SchoolFinanceBalancesView,
+    SchoolDailyCashbookView,
     SchoolStudentFinanceView,
     StudentEnrollmentViewSet,
     StudentFeeAssignmentViewSet,
@@ -65,6 +67,7 @@ router.register("school/subjects", SubjectViewSet, basename="school-subject")
 router.register("school/class-subjects", ClassSubjectViewSet, basename="school-class-subject")
 router.register("school/enrollments", StudentEnrollmentViewSet, basename="school-enrollment")
 router.register("school/fees", FeeViewSet, basename="school-fee")
+router.register("school/expenses", ExpenseViewSet, basename="school-expense")
 router.register("school/fee-assignments", StudentFeeAssignmentViewSet, basename="school-fee-assignment")
 router.register("school/payments", PaymentViewSet, basename="school-payment")
 router.register("school/ledger", FinancialLedgerEntryViewSet, basename="school-ledger")
@@ -95,6 +98,7 @@ urlpatterns = [
     path("school/search/", SchoolSearchView.as_view(), name="school-search"),
     path("school/available-parents/", AvailableParentView.as_view(), name="school-available-parents"),
     path("school/finance/balances/", SchoolFinanceBalancesView.as_view(), name="school-finance-balances"),
+    path("school/finance/cashbook/", SchoolDailyCashbookView.as_view(), name="school-finance-cashbook"),
     path("school/finance/students/<int:student_id>/", SchoolStudentFinanceView.as_view(), name="school-student-finance"),
     path("school/communication/settings/", SchoolCommunicationSettingsView.as_view(), name="school-communication-settings"),
     path("school/communication/fee-reminders/", SchoolFeeReminderView.as_view(), name="school-fee-reminders"),

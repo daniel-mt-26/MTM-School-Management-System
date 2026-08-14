@@ -12,6 +12,7 @@ from .models import (
     Announcement,
     ClassSubject,
     CommunicationMessage,
+    Expense,
     Fee,
     FinancialLedgerEntry,
     Notification,
@@ -609,6 +610,22 @@ class RecurringFeeTemplateSerializer(SchoolScopedSerializerMixin, serializers.Mo
         model = RecurringFeeTemplate
         fields = ["id", "academic_year", "term", "school_class", "class_name", "name", "amount", "currency", "start_month", "end_month", "is_active"]
         read_only_fields = ["id"]
+
+
+class ExpenseSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    recorded_by_name = serializers.SerializerMethodField()
+
+    def get_recorded_by_name(self, expense):
+        return expense.recorded_by.get_full_name() or expense.recorded_by.username
+
+    class Meta:
+        model = Expense
+        fields = [
+            "id", "expense_date", "category", "description", "amount", "currency",
+            "payment_method", "reference", "notes", "recorded_by", "recorded_by_name",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "currency", "recorded_by", "recorded_by_name", "created_at", "updated_at"]
 
 
 class AcademicResultSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
