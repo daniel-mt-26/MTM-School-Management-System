@@ -45,6 +45,7 @@ function App() {
             <Route path="/school/finance/:resource" element={<FinanceRecordsPage />} />
             <Route path="/school/finance/students/:studentId" element={<StudentFinancePage />} />
             <Route path="/school/communication" element={<CommunicationPage />} />
+            <Route path="/school/communication/:section" element={<CommunicationPage />} />
             <Route path="/school/settings" element={<SchoolSettingsPage />} />
           </Route>
           <Route element={<ProtectedRoute allowedRole="parent" />}>

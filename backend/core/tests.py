@@ -1,7 +1,8 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -11,16 +12,19 @@ from .models import (
     AcademicResult,
     AcademicYear,
     ClassSubject,
+    CommunicationMessage,
     Fee,
     FinancialLedgerEntry,
     Notification,
     Parent,
+    ParentCommunicationPreference,
     ParentStudent,
     Payment,
     Receipt,
     RecurringFeeTemplate,
     ReportCard,
     School,
+    SchoolCommunicationSettings,
     SchoolAdministrator,
     SchoolClass,
     Student,
@@ -829,3 +833,134 @@ class TenantIsolationTests(APITestCase):
         response = self.client.get("/api/auth/me/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["role"], User.Role.SCHOOL_ADMIN)
+
+
+class CommunicationTests(APITestCase):
+    # Reuse the two-school fixture without inheriting the pre-existing tests.
+    setUp = TenantIsolationTests.setUp
+    make_user = TenantIsolationTests.make_user
+    make_school_calendar = TenantIsolationTests.make_school_calendar
+    make_student = TenantIsolationTests.make_student
+    make_private_records = TenantIsolationTests.make_private_records
+    authenticate = TenantIsolationTests.authenticate
+
+    def opt_in_parent_a(self):
+        SchoolCommunicationSettings.objects.update_or_create(school=self.school_a, defaults={"whatsapp_enabled": True})
+        ParentCommunicationPreference.objects.update_or_create(
+            parent=self.parent_a,
+            defaults={"whatsapp_status": "opted_in", "whatsapp_phone": "+263771234567", "opted_in_at": timezone.now(), "consent_source": "test"},
+        )
+
+    def test_announcement_recipients_are_school_and_class_scoped_and_idempotent(self):
+        self.authenticate(self.admin_a)
+        response = self.client.post("/api/school/communication/announcements/", {"title": "Class notice", "message": "Tomorrow", "audience": "class", "school_class": self.class_a.id, "channels": ["in_app"]}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        announcement_id = response.data["id"]
+        self.assertEqual(self.client.get(f"/api/school/communication/announcements/{announcement_id}/preview/").data["recipient_count"], 1)
+        self.assertEqual(self.client.post(f"/api/school/communication/announcements/{announcement_id}/send/", {"confirm": True}, format="json").status_code, status.HTTP_200_OK)
+        self.assertEqual(CommunicationMessage.objects.filter(announcement_id=announcement_id).count(), 1)
+        self.client.post(f"/api/school/communication/announcements/{announcement_id}/send/", {"confirm": True}, format="json")
+        self.assertEqual(CommunicationMessage.objects.filter(announcement_id=announcement_id).count(), 1)
+        denied = self.client.post("/api/school/communication/announcements/", {"title": "Cross school", "message": "No", "audience": "parent", "parent": self.parent_b.id, "channels": ["in_app"]}, format="json")
+        self.assertEqual(denied.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_announcement_permissions_and_history_are_tenant_scoped(self):
+        self.authenticate(self.parent_a_user)
+        self.assertEqual(self.client.post("/api/school/communication/announcements/", {}, format="json").status_code, status.HTTP_403_FORBIDDEN)
+        self.client.force_authenticate(user=self.platform_admin)
+        self.assertEqual(self.client.get("/api/school/communication/history/").status_code, status.HTTP_403_FORBIDDEN)
+        self.client.force_authenticate(user=self.admin_a)
+        CommunicationMessage.objects.create(school=self.school_a, parent=self.parent_a, student=self.student_a, channel="in_app", event_type="announcement", template_key="school_announcement", payload={}, status="delivered", idempotency_key="history-a")
+        CommunicationMessage.objects.create(school=self.school_b, parent=self.parent_b, student=self.student_b, channel="in_app", event_type="announcement", template_key="school_announcement", payload={}, status="delivered", idempotency_key="history-b")
+        response = self.client.get("/api/school/communication/history/?school_id=" + str(self.school_b.id))
+        self.assertEqual([row["id"] for row in response.data], [CommunicationMessage.objects.get(idempotency_key="history-a").id])
+
+    def test_opt_in_opt_out_and_school_preference_boundaries(self):
+        self.authenticate(self.parent_a_user)
+        response = self.client.patch("/api/parent/communication/preference/", {"whatsapp_status": "opted_in", "whatsapp_phone": "+263771234567", "consent_source": "parent_portal"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["whatsapp_status"], "opted_in")
+        response = self.client.patch("/api/parent/communication/preference/", {"whatsapp_status": "opted_out"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.client.force_authenticate(user=self.admin_a)
+        self.assertEqual(self.client.patch(f"/api/school/communication/parents/{self.parent_b.id}/preference/", {"whatsapp_status": "opted_in"}, format="json").status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(self.client.patch(f"/api/school/communication/parents/{self.parent_a.id}/preference/", {"whatsapp_status": "opted_in"}, format="json").status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_payment_creates_local_records_only_for_eligible_opted_in_parent(self):
+        self.opt_in_parent_a()
+        self.authenticate(self.admin_a)
+        response = self.client.post("/api/school/payments/", {"student_fee_assignment": self.assignment_a.id, "amount": "20.00", "paid_at": timezone.now().isoformat(), "method": "cash"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        messages = CommunicationMessage.objects.filter(event_type="payment_receipt", parent=self.parent_a)
+        self.assertEqual(messages.filter(channel="in_app").count(), 1)
+        self.assertEqual(messages.filter(channel="whatsapp").count(), 1)
+        self.assertEqual(messages.get(channel="whatsapp").payload["amount"], "20.00")
+        self.assertEqual(messages.get(channel="whatsapp").payload["currency"], "USD")
+        self.assertFalse(CommunicationMessage.objects.filter(parent=self.parent_b, event_type="payment_receipt").exists())
+
+    def test_opted_out_or_school_disabled_parent_gets_no_whatsapp_job(self):
+        self.opt_in_parent_a()
+        preference = self.parent_a.communication_preference
+        preference.whatsapp_status = "opted_out"; preference.opted_out_at = timezone.now(); preference.save()
+        self.authenticate(self.admin_a)
+        self.client.post("/api/school/payments/", {"student_fee_assignment": self.assignment_a.id, "amount": "20.00", "paid_at": timezone.now().isoformat(), "method": "cash"}, format="json")
+        self.assertFalse(CommunicationMessage.objects.filter(event_type="payment_receipt", channel="whatsapp").exists())
+        SchoolCommunicationSettings.objects.update_or_create(school=self.school_a, defaults={"whatsapp_enabled": False})
+        preference.whatsapp_status = "opted_in"; preference.whatsapp_phone = "+263771234567"; preference.opted_in_at = timezone.now(); preference.save()
+        self.client.post("/api/school/payments/", {"student_fee_assignment": self.assignment_a.id, "amount": "20.00", "paid_at": timezone.now().isoformat(), "method": "cash"}, format="json")
+        self.assertFalse(CommunicationMessage.objects.filter(event_type="payment_receipt", channel="whatsapp").exists())
+
+    def test_fee_reminders_use_django_balance_and_are_idempotent(self):
+        self.opt_in_parent_a(); self.authenticate(self.admin_a)
+        first = self.client.post("/api/school/communication/fee-reminders/", {"student_ids": [self.student_a.id]}, format="json")
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        reminder = CommunicationMessage.objects.filter(event_type="fee_reminder", parent=self.parent_a).get(channel="whatsapp")
+        self.assertEqual(reminder.payload["amount_due"], "75.00")
+        second = self.client.post("/api/school/communication/fee-reminders/", {"student_ids": [self.student_a.id]}, format="json")
+        self.assertEqual(second.data["messages_created"], 0)
+        self.assertEqual(self.client.post("/api/school/communication/fee-reminders/", {"student_ids": [self.student_b.id]}, format="json").status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_report_card_and_parent_notifications_are_child_scoped(self):
+        self.opt_in_parent_a(); self.authenticate(self.admin_a)
+        response = self.client.post(f"/api/school/report-cards/{self.report_a.id}/notify-parents/", {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.client.post(f"/api/school/report-cards/{self.report_a.id}/notify-parents/", {}, format="json")
+        self.assertTrue(CommunicationMessage.objects.filter(report_card=self.report_a, parent=self.parent_a).exists())
+        self.assertEqual(CommunicationMessage.objects.filter(report_card=self.report_a, parent=self.parent_a).count(), 2)
+        self.assertFalse(CommunicationMessage.objects.filter(report_card=self.report_a, parent=self.parent_b).exists())
+        self.client.force_authenticate(user=self.parent_a_user)
+        notifications = self.client.get("/api/parent/notifications/")
+        self.assertEqual(notifications.status_code, status.HTTP_200_OK)
+        self.assertEqual(notifications.data[0]["student_name"], "Alice Learner")
+        notification_id = notifications.data[0]["id"]
+        self.assertEqual(self.client.post(f"/api/parent/notifications/{notification_id}/mark-read/", {}, format="json").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.post(f"/api/parent/notifications/{self.notification_b.id}/mark-read/", {}, format="json").status_code, status.HTTP_404_NOT_FOUND)
+
+    @override_settings(MTM_N8N_INTEGRATION_SECRET="test-integration-secret", MTM_OUTBOX_CLAIM_TIMEOUT_SECONDS=1)
+    def test_n8n_outbox_auth_claim_callbacks_and_attachment_are_safe(self):
+        self.opt_in_parent_a(); self.authenticate(self.admin_a)
+        payment = self.client.post("/api/school/payments/", {"student_fee_assignment": self.assignment_a.id, "amount": "20.00", "paid_at": timezone.now().isoformat(), "method": "cash"}, format="json")
+        receipt_id = payment.data["receipt_id"]
+        message = CommunicationMessage.objects.get(event_type="payment_receipt", channel="whatsapp")
+        self.client.force_authenticate(user=None)
+        self.assertEqual(self.client.post("/api/integrations/n8n/outbox/claim/", {}, format="json").status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(self.client.post("/api/integrations/n8n/outbox/claim/", {}, format="json", HTTP_X_MTM_INTEGRATION_SECRET="wrong").status_code, status.HTTP_403_FORBIDDEN)
+        self.client.force_authenticate(user=self.admin_a)
+        self.assertEqual(self.client.post("/api/integrations/n8n/outbox/claim/", {}, format="json").status_code, status.HTTP_403_FORBIDDEN)
+        self.client.force_authenticate(user=None)
+        claim = self.client.post("/api/integrations/n8n/outbox/claim/", {"batch_size": 10}, format="json", HTTP_X_MTM_INTEGRATION_SECRET="test-integration-secret")
+        self.assertEqual([item["id"] for item in claim.data["messages"]], [message.id])
+        self.assertEqual(CommunicationMessage.objects.get(pk=message.id).status, "processing")
+        self.assertEqual(self.client.post("/api/integrations/n8n/outbox/claim/", {"batch_size": 10}, format="json", HTTP_X_MTM_INTEGRATION_SECRET="test-integration-secret").data["messages"], [])
+        message.claimed_at = timezone.now() - timedelta(seconds=5)
+        message.save(update_fields=["claimed_at"])
+        recovered = self.client.post("/api/integrations/n8n/outbox/claim/", {"batch_size": 10}, format="json", HTTP_X_MTM_INTEGRATION_SECRET="test-integration-secret")
+        self.assertEqual([item["id"] for item in recovered.data["messages"]], [message.id])
+        self.assertEqual(self.client.get(f"/api/integrations/n8n/outbox/{message.id}/attachment/", HTTP_X_MTM_INTEGRATION_SECRET="test-integration-secret").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.get(f"/api/integrations/n8n/outbox/{receipt_id}/attachment/", HTTP_X_MTM_INTEGRATION_SECRET="test-integration-secret").status_code, status.HTTP_404_NOT_FOUND)
+        sent = self.client.post(f"/api/integrations/n8n/outbox/{message.id}/sent/", {"provider_message_id": "provider-001"}, format="json", HTTP_X_MTM_INTEGRATION_SECRET="test-integration-secret")
+        self.assertEqual(sent.data["status"], "sent")
+        self.client.post("/api/integrations/n8n/whatsapp/status/", {"provider_message_id": "provider-001", "status": "read"}, format="json", HTTP_X_MTM_INTEGRATION_SECRET="test-integration-secret")
+        self.client.post("/api/integrations/n8n/whatsapp/status/", {"provider_message_id": "provider-001", "status": "sent"}, format="json", HTTP_X_MTM_INTEGRATION_SECRET="test-integration-secret")
+        self.assertEqual(CommunicationMessage.objects.get(pk=message.id).status, "read")
+        self.assertEqual(self.client.post("/api/integrations/n8n/whatsapp/status/", {"provider_message_id": "unknown", "status": "delivered"}, format="json", HTTP_X_MTM_INTEGRATION_SECRET="test-integration-secret").data["updated"], False)

@@ -1,0 +1,18 @@
+{
+  "name": "MTM fee reminder trigger (disabled configuration template)",
+  "nodes": [
+    {
+      "parameters": {"rule": {"interval": [{"field": "days", "daysInterval": 1}]}},
+      "id": "daily-trigger",
+      "name": "Daily scheduling placeholder",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [300, 300],
+      "notes": "Disabled. MTM must select the school and business policy; n8n cannot discover debtors or calculate balances."
+    }
+  ],
+  "connections": {},
+  "active": false,
+  "settings": {"executionOrder": "v1"},
+  "versionId": "configuration-template"
+}

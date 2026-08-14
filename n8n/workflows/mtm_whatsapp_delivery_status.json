@@ -1,0 +1,26 @@
+{
+  "name": "MTM WhatsApp delivery status callback (configuration template)",
+  "nodes": [
+    {
+      "parameters": {"path": "mtm-whatsapp-status", "httpMethod": "POST", "responseMode": "onReceived", "options": {}},
+      "id": "meta-status-webhook",
+      "name": "Verified Meta status webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [300, 300],
+      "notes": "Configure Meta webhook verification and signature handling before activation."
+    },
+    {
+      "parameters": {"method": "POST", "url": "={{$env.MTM_API_BASE_URL + '/api/integrations/n8n/whatsapp/status/'}}", "sendHeaders": true, "headerParameters": {"parameters": [{"name": "X-MTM-Integration-Secret", "value": "={{$env.MTM_N8N_INTEGRATION_SECRET}}"}]}, "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify({ provider_message_id: $json.provider_message_id, status: $json.status, reason: $json.reason }) }}"},
+      "id": "report-mtm-status",
+      "name": "Report normalized delivery status to MTM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [580, 300]
+    }
+  ],
+  "connections": {"Verified Meta status webhook": {"main": [[{"node": "Report normalized delivery status to MTM", "type": "main", "index": 0}]]}},
+  "active": false,
+  "settings": {"executionOrder": "v1"},
+  "versionId": "configuration-template"
+}

@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator
+from django.core.validators import MinValueValidator, RegexValidator
 from django.db import models
 from django.db.models import Q
 
@@ -401,6 +401,7 @@ class ReportCard(models.Model):
 class Notification(models.Model):
     school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="notifications")
     recipient = models.ForeignKey(User, on_delete=models.PROTECT, related_name="notifications", null=True, blank=True)
+    student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="notifications", null=True, blank=True)
     title = models.CharField(max_length=200)
     message = models.TextField()
     is_read = models.BooleanField(default=False)
@@ -408,3 +409,143 @@ class Notification(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=["school", "is_read", "created_at"])]
+
+
+class SchoolCommunicationSettings(models.Model):
+    """Per-school controls for local communication generation, never provider credentials."""
+
+    school = models.OneToOneField(School, on_delete=models.PROTECT, related_name="communication_settings")
+    whatsapp_enabled = models.BooleanField(default=False)
+    payment_receipt_notifications_enabled = models.BooleanField(default=True)
+    fee_reminders_enabled = models.BooleanField(default=True)
+    report_card_notifications_enabled = models.BooleanField(default=True)
+    whatsapp_announcements_enabled = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class ParentCommunicationPreference(models.Model):
+    class WhatsAppStatus(models.TextChoices):
+        NOT_CONFIGURED = "not_configured", "Not configured"
+        OPTED_IN = "opted_in", "Opted in"
+        OPTED_OUT = "opted_out", "Opted out"
+
+    parent = models.OneToOneField(Parent, on_delete=models.PROTECT, related_name="communication_preference")
+    whatsapp_status = models.CharField(max_length=20, choices=WhatsAppStatus.choices, default=WhatsAppStatus.NOT_CONFIGURED)
+    whatsapp_phone = models.CharField(max_length=30, blank=True)
+    opted_in_at = models.DateTimeField(null=True, blank=True)
+    opted_out_at = models.DateTimeField(null=True, blank=True)
+    consent_source = models.CharField(max_length=100, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def clean(self):
+        if self.whatsapp_status == self.WhatsAppStatus.OPTED_IN:
+            phone = self.whatsapp_phone or self.parent.phone_number
+            RegexValidator(
+                regex=r"^\+[1-9]\d{7,14}$",
+                message="Use an international phone number in E.164 format, for example +263771234567.",
+            )(phone)
+        if self.whatsapp_status == self.WhatsAppStatus.OPTED_OUT and not self.opted_out_at:
+            raise ValidationError({"opted_out_at": "An opt-out timestamp is required."})
+
+
+class Announcement(models.Model):
+    class Audience(models.TextChoices):
+        ALL_PARENTS = "all_parents", "All parents"
+        SCHOOL_CLASS = "class", "Specific class"
+        STUDENT = "student", "Specific student"
+        PARENT = "parent", "Specific parent"
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        SENT = "sent", "Sent"
+
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="announcements")
+    title = models.CharField(max_length=200)
+    message = models.TextField()
+    audience = models.CharField(max_length=20, choices=Audience.choices)
+    school_class = models.ForeignKey(SchoolClass, on_delete=models.PROTECT, related_name="announcements", null=True, blank=True)
+    student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="announcements", null=True, blank=True)
+    parent = models.ForeignKey(Parent, on_delete=models.PROTECT, related_name="announcements", null=True, blank=True)
+    channels = models.JSONField(default=list)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT)
+    recipient_count = models.PositiveIntegerField(default=0)
+    created_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="created_announcements")
+    created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["school", "status", "created_at"])]
+
+    def clean(self):
+        targets = (self.school_class_id, self.student_id, self.parent_id)
+        if self.audience == self.Audience.ALL_PARENTS and any(targets):
+            raise ValidationError("All-parent announcements cannot have a specific audience target.")
+        required = {
+            self.Audience.SCHOOL_CLASS: self.school_class_id,
+            self.Audience.STUDENT: self.student_id,
+            self.Audience.PARENT: self.parent_id,
+        }
+        if self.audience in required and not required[self.audience]:
+            raise ValidationError("The selected audience requires its matching target.")
+        for target in (self.school_class, self.student, self.parent):
+            if target and target.school_id != self.school_id:
+                raise ValidationError("Announcement targets must belong to the announcement school.")
+
+
+class CommunicationMessage(models.Model):
+    """Durable, per-recipient delivery record. Only WhatsApp rows enter the n8n outbox."""
+
+    class Channel(models.TextChoices):
+        IN_APP = "in_app", "In-app"
+        WHATSAPP = "whatsapp", "WhatsApp"
+
+    class EventType(models.TextChoices):
+        ANNOUNCEMENT = "announcement", "Announcement"
+        PAYMENT_RECEIPT = "payment_receipt", "Payment receipt"
+        FEE_REMINDER = "fee_reminder", "Fee reminder"
+        REPORT_CARD_AVAILABLE = "report_card_available", "Report card available"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        PROCESSING = "processing", "Processing"
+        SENT = "sent", "Sent"
+        DELIVERED = "delivered", "Delivered"
+        READ = "read", "Read"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="communication_messages")
+    parent = models.ForeignKey(Parent, on_delete=models.PROTECT, related_name="communication_messages")
+    student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="communication_messages", null=True, blank=True)
+    announcement = models.ForeignKey(Announcement, on_delete=models.PROTECT, related_name="messages", null=True, blank=True)
+    receipt = models.ForeignKey(Receipt, on_delete=models.PROTECT, related_name="communication_messages", null=True, blank=True)
+    report_card = models.ForeignKey(ReportCard, on_delete=models.PROTECT, related_name="communication_messages", null=True, blank=True)
+    notification = models.OneToOneField(Notification, on_delete=models.PROTECT, related_name="communication_message", null=True, blank=True)
+    channel = models.CharField(max_length=12, choices=Channel.choices)
+    event_type = models.CharField(max_length=30, choices=EventType.choices)
+    template_key = models.CharField(max_length=100)
+    payload = models.JSONField(default=dict)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+    provider_message_id = models.CharField(max_length=255, blank=True, null=True, unique=True)
+    idempotency_key = models.CharField(max_length=255, unique=True)
+    attempt_count = models.PositiveIntegerField(default=0)
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+    failed_at = models.DateTimeField(null=True, blank=True)
+    failure_reason = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["school", "status", "created_at"]),
+            models.Index(fields=["channel", "status", "claimed_at"]),
+            models.Index(fields=["parent", "created_at"]),
+        ]
+
+    def clean(self):
+        if self.parent.school_id != self.school_id:
+            raise ValidationError("A communication message parent must belong to its school.")
+        if self.student_id and self.student.school_id != self.school_id:
+            raise ValidationError("A communication message student must belong to its school.")

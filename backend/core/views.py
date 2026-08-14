@@ -1,4 +1,7 @@
 from datetime import timedelta
+from secrets import compare_digest
+
+from django.conf import settings
 from decimal import Decimal
 
 from django.db import transaction
@@ -8,7 +11,7 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import MethodNotAllowed, ValidationError
+from rest_framework.exceptions import MethodNotAllowed, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -16,17 +19,21 @@ from rest_framework.views import APIView
 from .models import (
     AcademicResult,
     AcademicYear,
+    Announcement,
     ClassSubject,
+    CommunicationMessage,
     Fee,
     FinancialLedgerEntry,
     Notification,
     Parent,
+    ParentCommunicationPreference,
     ParentStudent,
     Payment,
     Receipt,
     RecurringFeeTemplate,
     ReportCard,
     School,
+    SchoolCommunicationSettings,
     SchoolClass,
     Student,
     StudentEnrollment,
@@ -36,22 +43,35 @@ from .models import (
     TimetableEntry,
 )
 from .finance import assign_fee, assignment_totals, generate_recurring_charges, record_payment, reverse_payment, student_totals
+from .communications import (
+    announcement_recipients,
+    claim_whatsapp_messages,
+    communication_settings,
+    create_fee_reminders,
+    create_report_card_messages,
+    send_announcement,
+    transition_message,
+)
 from .permissions import IsParent, IsPlatformAdministrator, IsSchoolAdministrator
 from .serializers import (
     AcademicResultSerializer,
     AcademicYearSerializer,
+    AnnouncementSerializer,
     AvailableParentSerializer,
     ClassSubjectSerializer,
+    CommunicationMessageSerializer,
     CurrentUserSerializer,
     FeeSerializer,
     FinancialLedgerEntrySerializer,
     NotificationSerializer,
     ParentPaymentSerializer,
+    ParentCommunicationPreferenceSerializer,
     ParentDetailSerializer,
     ParentListSerializer,
     ParentWriteSerializer,
     ParentReceiptSerializer,
     ParentReportCardSerializer,
+    ParentNotificationSerializer,
     ParentResultSerializer,
     ParentStudentSerializer,
     PaymentSerializer,
@@ -59,6 +79,7 @@ from .serializers import (
     RecurringFeeTemplateSerializer,
     ReportCardSerializer,
     SchoolClassSerializer,
+    SchoolCommunicationSettingsSerializer,
     SchoolParentStudentSerializer,
     SchoolProfileSerializer,
     SchoolSerializer,
@@ -176,6 +197,243 @@ class SchoolSearchView(APIView):
             ],
             "classes": [{"id": school_class.id, "name": school_class.name} for school_class in classes],
         })
+
+
+class SchoolCommunicationSettingsView(APIView):
+    permission_classes = [IsSchoolAdministrator]
+
+    def get_object(self, request):
+        return communication_settings(request.user.school_administrator.school)
+
+    def get(self, request):
+        return Response(SchoolCommunicationSettingsSerializer(self.get_object(request)).data)
+
+    def patch(self, request):
+        serializer = SchoolCommunicationSettingsSerializer(self.get_object(request), data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class AnnouncementViewSet(SchoolAdminViewSet):
+    queryset = Announcement.objects.all()
+    serializer_class = AnnouncementSerializer
+    school_lookup = "school"
+
+    def get_queryset(self):
+        return super().get_queryset().select_related("school_class", "student", "parent", "created_by").order_by("-created_at", "-id")
+
+    def perform_create(self, serializer):
+        serializer.save(school=self.get_school(), created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        if self.get_object().status != Announcement.Status.DRAFT:
+            raise ValidationError({"detail": "Sent announcements are immutable."})
+        serializer.save()
+
+    def destroy(self, request, *args, **kwargs):
+        if self.get_object().status != Announcement.Status.DRAFT:
+            raise MethodNotAllowed("DELETE")
+        return super().destroy(request, *args, **kwargs)
+
+    @action(detail=True, methods=["get"])
+    def preview(self, request, *args, **kwargs):
+        announcement = self.get_object()
+        return Response({"recipient_count": announcement_recipients(announcement).count(), "status": announcement.status})
+
+    @action(detail=True, methods=["post"])
+    def send(self, request, *args, **kwargs):
+        if request.data.get("confirm") is not True:
+            raise ValidationError({"confirm": "Set confirm to true after reviewing the recipient count."})
+        announcement, recipient_count = send_announcement(self.get_object())
+        return Response({"id": announcement.id, "status": announcement.status, "recipient_count": recipient_count})
+
+
+class CommunicationMessageViewSet(SchoolScopedQuerysetMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    queryset = CommunicationMessage.objects.all()
+    serializer_class = CommunicationMessageSerializer
+    school_lookup = "school"
+    permission_classes = [IsSchoolAdministrator]
+
+    def get_queryset(self):
+        queryset = super().get_queryset().select_related("parent__user", "student", "notification")
+        for param in ("status", "channel", "event_type"):
+            if value := self.request.query_params.get(param):
+                queryset = queryset.filter(**{param: value})
+        if value := self.request.query_params.get("student"):
+            queryset = queryset.filter(student_id=value)
+        if value := self.request.query_params.get("parent"):
+            queryset = queryset.filter(parent_id=value)
+        if value := self.request.query_params.get("date"):
+            queryset = queryset.filter(created_at__date=value)
+        return queryset.order_by("-created_at", "-id")
+
+
+class SchoolParentCommunicationPreferenceView(APIView):
+    permission_classes = [IsSchoolAdministrator]
+
+    def get_object(self, request, parent_id):
+        parent = get_object_or_404(Parent, pk=parent_id, school=request.user.school_administrator.school)
+        preference, _ = ParentCommunicationPreference.objects.get_or_create(parent=parent)
+        return preference
+
+    def get(self, request, parent_id):
+        preference = self.get_object(request, parent_id)
+        return Response(ParentCommunicationPreferenceSerializer(preference, context={"parent": preference.parent}).data)
+
+    def patch(self, request, parent_id):
+        preference = self.get_object(request, parent_id)
+        if preference.whatsapp_status == ParentCommunicationPreference.WhatsAppStatus.OPTED_OUT and request.data.get("whatsapp_status") == ParentCommunicationPreference.WhatsAppStatus.OPTED_IN:
+            raise ValidationError({"whatsapp_status": "A parent opt-out cannot be overridden by a school administrator."})
+        serializer = ParentCommunicationPreferenceSerializer(preference, data=request.data, partial=True, context={"parent": preference.parent})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class SchoolFeeReminderView(APIView):
+    permission_classes = [IsSchoolAdministrator]
+
+    def post(self, request):
+        school = request.user.school_administrator.school
+        requested_ids = request.data.get("student_ids", [])
+        if requested_ids and (not isinstance(requested_ids, list) or not all(isinstance(value, int) for value in requested_ids)):
+            raise ValidationError({"student_ids": "Use a list of student IDs from this school."})
+        students = Student.objects.filter(school=school, is_active=True)
+        if requested_ids:
+            students = students.filter(id__in=requested_ids)
+            if students.count() != len(set(requested_ids)):
+                raise ValidationError({"student_ids": "One or more students do not belong to this school."})
+        return Response(create_fee_reminders(school=school, students=students))
+
+
+class ParentCommunicationPreferenceView(APIView):
+    permission_classes = [IsParent]
+
+    def get_object(self, request):
+        preference, _ = ParentCommunicationPreference.objects.get_or_create(parent=request.user.parent_profile)
+        return preference
+
+    def get(self, request):
+        preference = self.get_object(request)
+        return Response(ParentCommunicationPreferenceSerializer(preference, context={"parent": preference.parent}).data)
+
+    def patch(self, request):
+        preference = self.get_object(request)
+        serializer = ParentCommunicationPreferenceSerializer(preference, data=request.data, partial=True, context={"parent": preference.parent})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class ParentNotificationViewSet(viewsets.GenericViewSet, mixins.ListModelMixin, mixins.RetrieveModelMixin):
+    permission_classes = [IsParent]
+    serializer_class = ParentNotificationSerializer
+
+    def get_queryset(self):
+        parent = self.request.user.parent_profile
+        return Notification.objects.filter(school=parent.school, recipient=self.request.user).select_related("student").order_by("-created_at", "-id")
+
+    @action(detail=True, methods=["post"], url_path="mark-read")
+    def mark_read(self, request, *args, **kwargs):
+        notification = self.get_object()
+        if not notification.is_read:
+            notification.is_read = True
+            notification.save(update_fields=["is_read"])
+        return Response(self.get_serializer(notification).data)
+
+
+class N8NIntegrationView(APIView):
+    """Separate shared-secret boundary for n8n; JWT roles never authorize it."""
+
+    permission_classes = []
+
+    def is_authorized(self, request):
+        configured = getattr(settings, "MTM_N8N_INTEGRATION_SECRET", "")
+        presented = request.headers.get("X-MTM-Integration-Secret", "")
+        return bool(configured and presented and compare_digest(configured, presented))
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if not self.is_authorized(request):
+            raise PermissionDenied("A valid integration credential is required.")
+
+
+def integration_message_payload(message):
+    return {
+        "id": message.id,
+        "event_type": message.event_type,
+        "template_key": message.template_key,
+        "recipient": message.payload.get("recipient"),
+        "language": "en",
+        "parameters": {key: value for key, value in message.payload.items() if key != "recipient"},
+        "has_attachment": bool(message.receipt_id),
+    }
+
+
+class N8NOutboxClaimView(N8NIntegrationView):
+    def post(self, request):
+        try:
+            batch_size = min(max(int(request.data.get("batch_size", 10)), 1), 50)
+        except (TypeError, ValueError):
+            raise ValidationError({"batch_size": "Use a whole number between 1 and 50."})
+        messages = claim_whatsapp_messages(
+            batch_size=batch_size,
+            stale_after_seconds=getattr(settings, "MTM_OUTBOX_CLAIM_TIMEOUT_SECONDS", 900),
+            max_attempts=getattr(settings, "MTM_OUTBOX_MAX_ATTEMPTS", 5),
+        )
+        return Response({"messages": [integration_message_payload(message) for message in messages]})
+
+
+class N8NOutboxSentView(N8NIntegrationView):
+    def post(self, request, message_id):
+        message = get_object_or_404(CommunicationMessage, pk=message_id, channel=CommunicationMessage.Channel.WHATSAPP)
+        provider_message_id = str(request.data.get("provider_message_id", "")).strip()
+        if not provider_message_id:
+            raise ValidationError({"provider_message_id": "The provider message ID is required."})
+        if CommunicationMessage.objects.exclude(pk=message.pk).filter(provider_message_id=provider_message_id).exists():
+            raise ValidationError({"provider_message_id": "This provider message ID is already recorded."})
+        transition_message(message, CommunicationMessage.Status.SENT, provider_message_id=provider_message_id)
+        return Response({"id": message.id, "status": message.status})
+
+
+class N8NOutboxFailedView(N8NIntegrationView):
+    def post(self, request, message_id):
+        message = get_object_or_404(CommunicationMessage, pk=message_id, channel=CommunicationMessage.Channel.WHATSAPP)
+        reason = str(request.data.get("reason", "Delivery failed")).strip()[:255]
+        transition_message(message, CommunicationMessage.Status.FAILED, failure_reason=reason or "Delivery failed")
+        return Response({"id": message.id, "status": message.status})
+
+
+class N8NWhatsAppStatusView(N8NIntegrationView):
+    def post(self, request):
+        provider_message_id = str(request.data.get("provider_message_id", "")).strip()
+        new_status = str(request.data.get("status", "")).strip().lower()
+        allowed = {
+            "sent": CommunicationMessage.Status.SENT,
+            "delivered": CommunicationMessage.Status.DELIVERED,
+            "read": CommunicationMessage.Status.READ,
+            "failed": CommunicationMessage.Status.FAILED,
+        }
+        if not provider_message_id or new_status not in allowed:
+            raise ValidationError({"detail": "A provider_message_id and a valid status are required."})
+        message = CommunicationMessage.objects.filter(provider_message_id=provider_message_id, channel=CommunicationMessage.Channel.WHATSAPP).first()
+        if not message:
+            return Response({"updated": False})
+        transition_message(message, allowed[new_status], failure_reason=str(request.data.get("reason", ""))[:255])
+        return Response({"updated": True, "id": message.id, "status": message.status})
+
+
+class N8NOutboxAttachmentView(N8NIntegrationView):
+    def get(self, request, message_id):
+        message = get_object_or_404(
+            CommunicationMessage.objects.select_related("receipt__payment__student_fee_assignment__student"),
+            pk=message_id,
+            channel=CommunicationMessage.Channel.WHATSAPP,
+            event_type=CommunicationMessage.EventType.PAYMENT_RECEIPT,
+            receipt__isnull=False,
+        )
+        return receipt_pdf_response(message.receipt)
 
 
 class SchoolClassViewSet(SchoolAdminViewSet):
@@ -730,6 +988,12 @@ class ReportCardViewSet(ReportCardDownloadMixin, SchoolAdminViewSet):
             if value := self.request.query_params.get(param):
                 queryset = queryset.filter(**{lookup: value})
         return queryset.order_by("-generated_at", "id")
+
+    @action(detail=True, methods=["post"], url_path="notify-parents")
+    def notify_parents(self, request, *args, **kwargs):
+        report_card = self.get_object()
+        messages = create_report_card_messages(report_card)
+        return Response({"report_card": report_card.id, "messages_created": len(messages)})
 
 
 class NotificationViewSet(SchoolAdminViewSet):

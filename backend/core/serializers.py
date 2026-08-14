@@ -2,22 +2,27 @@ from copy import copy
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.contrib.auth.password_validation import validate_password
+from django.utils import timezone
 from rest_framework import serializers
 
 from .models import (
     AcademicResult,
     AcademicYear,
+    Announcement,
     ClassSubject,
+    CommunicationMessage,
     Fee,
     FinancialLedgerEntry,
     Notification,
     Parent,
+    ParentCommunicationPreference,
     ParentStudent,
     Payment,
     Receipt,
     RecurringFeeTemplate,
     ReportCard,
     School,
+    SchoolCommunicationSettings,
     SchoolClass,
     Student,
     StudentEnrollment,
@@ -652,10 +657,123 @@ class ReportCardSerializer(SchoolScopedSerializerMixin, serializers.ModelSeriali
 
 
 class NotificationSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+
+    def get_student_name(self, notification):
+        if not notification.student_id:
+            return ""
+        return f"{notification.student.first_name} {notification.student.last_name}".strip()
+
     class Meta:
         model = Notification
-        fields = ["id", "title", "message", "is_read", "created_at"]
+        fields = ["id", "title", "message", "student_name", "is_read", "created_at"]
         read_only_fields = ["id", "created_at"]
+
+
+class SchoolCommunicationSettingsSerializer(serializers.ModelSerializer):
+    integration_available = serializers.SerializerMethodField()
+
+    def get_integration_available(self, settings):
+        from django.conf import settings as django_settings
+        return bool(getattr(django_settings, "MTM_N8N_INTEGRATION_SECRET", ""))
+
+    class Meta:
+        model = SchoolCommunicationSettings
+        fields = [
+            "whatsapp_enabled",
+            "payment_receipt_notifications_enabled",
+            "fee_reminders_enabled",
+            "report_card_notifications_enabled",
+            "whatsapp_announcements_enabled",
+            "integration_available",
+        ]
+        read_only_fields = ["integration_available"]
+
+
+class ParentCommunicationPreferenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ParentCommunicationPreference
+        fields = ["whatsapp_status", "whatsapp_phone", "opted_in_at", "opted_out_at", "consent_source", "updated_at"]
+        read_only_fields = ["opted_in_at", "opted_out_at", "updated_at"]
+
+    def validate(self, attrs):
+        instance = self.instance or ParentCommunicationPreference(parent=self.context["parent"])
+        for field, value in attrs.items():
+            setattr(instance, field, value)
+        now = timezone.now()
+        if instance.whatsapp_status == ParentCommunicationPreference.WhatsAppStatus.OPTED_IN:
+            instance.opted_in_at = instance.opted_in_at or now
+            instance.opted_out_at = None
+        elif instance.whatsapp_status == ParentCommunicationPreference.WhatsAppStatus.OPTED_OUT:
+            instance.opted_out_at = instance.opted_out_at or now
+        try:
+            instance.clean()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(getattr(exc, "message_dict", {"non_field_errors": exc.messages})) from exc
+        attrs["opted_in_at"] = instance.opted_in_at
+        attrs["opted_out_at"] = instance.opted_out_at
+        return attrs
+
+
+class AnnouncementSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    scoped_related_fields = {
+        "school_class": (SchoolClass, "school"),
+        "student": (Student, "school"),
+        "parent": (Parent, "school"),
+    }
+
+    class Meta:
+        model = Announcement
+        fields = ["id", "title", "message", "audience", "school_class", "student", "parent", "channels", "status", "recipient_count", "created_at", "sent_at"]
+        read_only_fields = ["id", "status", "recipient_count", "created_at", "sent_at"]
+
+    def validate_channels(self, value):
+        allowed = {CommunicationMessage.Channel.IN_APP, CommunicationMessage.Channel.WHATSAPP}
+        if not isinstance(value, list) or not value or not set(value).issubset(allowed):
+            raise serializers.ValidationError("Choose one or both of: in_app, whatsapp.")
+        return value
+
+    def validate(self, attrs):
+        attrs = serializers.ModelSerializer.validate(self, attrs)
+        candidate = copy(self.instance) if self.instance else Announcement(school=self.get_school())
+        for field, value in attrs.items():
+            setattr(candidate, field, value)
+        try:
+            candidate.clean()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(getattr(exc, "message_dict", {"non_field_errors": exc.messages})) from exc
+        return attrs
+
+
+class CommunicationMessageSerializer(serializers.ModelSerializer):
+    parent_name = serializers.CharField(source="parent.user.get_full_name", read_only=True)
+    student_name = serializers.SerializerMethodField()
+    description = serializers.SerializerMethodField()
+
+    def get_student_name(self, message):
+        if not message.student_id:
+            return ""
+        return f"{message.student.first_name} {message.student.last_name}".strip()
+
+    def get_description(self, message):
+        return message.payload.get("title") or message.payload.get("receipt_number") or message.event_type.replace("_", " ")
+
+    class Meta:
+        model = CommunicationMessage
+        fields = ["id", "parent", "parent_name", "student", "student_name", "channel", "event_type", "template_key", "status", "description", "created_at", "sent_at", "delivered_at", "read_at", "failed_at", "failure_reason"]
+        read_only_fields = fields
+
+
+class ParentNotificationSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+
+    def get_student_name(self, notification):
+        return f"{notification.student.first_name} {notification.student.last_name}".strip() if notification.student_id else ""
+
+    class Meta:
+        model = Notification
+        fields = ["id", "title", "message", "student_name", "is_read", "created_at"]
+        read_only_fields = ["id", "title", "message", "student_name", "created_at"]
 
 
 class SchoolParentStudentSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):

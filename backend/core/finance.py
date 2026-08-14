@@ -81,6 +81,10 @@ def record_payment(*, student_fee_assignment, amount, paid_at, method, reference
         payment=payment,
         issued_at=timezone.now(),
     )
+    # This creates only local durable in-app/outbox records. It deliberately
+    # performs no provider or n8n HTTP call inside the financial transaction.
+    from .communications import create_payment_receipt_messages
+    create_payment_receipt_messages(payment, receipt)
     return payment, receipt
 
 

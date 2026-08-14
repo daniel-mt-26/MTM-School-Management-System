@@ -60,3 +60,9 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 MAILERS = {"default": {"BACKEND": "django.core.mail.backends.console.EmailBackend"}}
+
+# n8n uses this server-to-server credential; it is never sent to React or
+# stored in the database. A blank value deliberately disables integration APIs.
+MTM_N8N_INTEGRATION_SECRET = os.getenv("MTM_N8N_INTEGRATION_SECRET", "")
+MTM_OUTBOX_CLAIM_TIMEOUT_SECONDS = int(os.getenv("MTM_OUTBOX_CLAIM_TIMEOUT_SECONDS", "900"))
+MTM_OUTBOX_MAX_ATTEMPTS = int(os.getenv("MTM_OUTBOX_MAX_ATTEMPTS", "5"))

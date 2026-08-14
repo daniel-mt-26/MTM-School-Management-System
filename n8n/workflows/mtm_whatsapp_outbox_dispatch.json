@@ -1,0 +1,42 @@
+{
+  "name": "MTM WhatsApp outbox dispatch (configuration template)",
+  "nodes": [
+    {
+      "parameters": {"rule": {"interval": [{"field": "minutes", "minutesInterval": 1}]}},
+      "id": "schedule-trigger",
+      "name": "Poll MTM outbox",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {"method": "POST", "url": "={{$env.MTM_API_BASE_URL + '/api/integrations/n8n/outbox/claim/'}}", "sendHeaders": true, "headerParameters": {"parameters": [{"name": "X-MTM-Integration-Secret", "value": "={{$env.MTM_N8N_INTEGRATION_SECRET}}"}]}, "sendBody": true, "specifyBody": "json", "jsonBody": "{\"batch_size\": 10}"},
+      "id": "claim-outbox",
+      "name": "Claim durable outbox messages",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {"fieldToSplitOut": "messages", "options": {}},
+      "id": "split-messages",
+      "name": "Process each claimed message",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [740, 300]
+    },
+    {
+      "parameters": {"rules": {"values": [{"conditions": {"options": {"caseSensitive": true}, "conditions": [{"leftValue": "={{$json.template_key}}", "rightValue": "payment_receipt", "operator": {"type": "string", "operation": "equals"}}]}, "renameOutput": true, "outputKey": "payment_receipt"}]}},
+      "id": "template-switch",
+      "name": "Map MTM template key in n8n",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [980, 300],
+      "notes": "Add approved Meta-template mappings and WhatsApp Cloud send nodes here. Do not calculate business data."
+    }
+  ],
+  "connections": {"Poll MTM outbox": {"main": [[{"node": "Claim durable outbox messages", "type": "main", "index": 0}]]}, "Claim durable outbox messages": {"main": [[{"node": "Process each claimed message", "type": "main", "index": 0}]]}, "Process each claimed message": {"main": [[{"node": "Map MTM template key in n8n", "type": "main", "index": 0}]]}},
+  "active": false,
+  "settings": {"executionOrder": "v1"},
+  "versionId": "configuration-template"
+}
