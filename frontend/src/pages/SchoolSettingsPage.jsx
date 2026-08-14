@@ -63,6 +63,7 @@ function SchoolSettingsPage() {
         email: form.email.trim(),
         phone: form.phone,
         address: form.address,
+        default_currency: form.default_currency.trim().toUpperCase(),
       }, logoFile)
       setForm(updated)
       setLogoFile(null)
@@ -107,6 +108,7 @@ function SchoolSettingsPage() {
         <label>School Email<input name="email" type="email" value={form.email} onChange={updateField} required /></label>
         <label>Phone Number<input name="phone" value={form.phone} onChange={updateField} required /></label>
         <label>Address<textarea name="address" value={form.address} onChange={updateField} rows="4" /></label>
+        <label>Default Currency<input name="default_currency" value={form.default_currency} onChange={updateField} maxLength="3" placeholder="USD" required /><span className="field-help">Three-letter operational currency code. It cannot be changed after finance records exist.</span></label>
 
         {error && <p className="form-error" role="alert">{error}</p>}
         {message && <p className="form-success" role="status">{message}</p>}

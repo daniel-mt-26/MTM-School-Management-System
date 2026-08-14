@@ -1,5 +1,4 @@
-import SchoolSectionPage from './SchoolSectionPage'
+import { Link } from 'react-router-dom'
 
-export default function FinancePage() {
-  return <SchoolSectionPage title="Finance" description="Finance management will be available here." />
-}
+const sections = [['fees', 'Fees', 'Create and maintain term or class fees.'], ['recurring-fees', 'Recurring Fees', 'Configure and generate monthly charges.'], ['assignments', 'Fee Assignments', 'Assign individual or class charges.'], ['payments', 'Payments', 'Record historical and partial payments.'], ['receipts', 'Receipts', 'View payment receipts.'], ['balances', 'Student Balances', 'Review authoritative student balances.'], ['ledger', 'Ledger', 'Read-only financial history.'], ['reports', 'Reports', 'Outstanding balances and collection review.']]
+export default function FinancePage() { return <main className="student-page"><header className="student-page-header"><div><Link to="/school" className="dashboard-link">Back to School Dashboard</Link><h1>Finance</h1><p>Charges, payments, receipts, balances, and financial history.</p></div></header><section className="dashboard-navigation">{sections.map(([path, title, copy]) => <Link key={path} to={`/school/finance/${path}`} className="dashboard-card"><h2>{title}</h2><p>{copy}</p></Link>)}</section></main> }

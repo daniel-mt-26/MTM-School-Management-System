@@ -15,6 +15,7 @@ from .models import (
     ParentStudent,
     Payment,
     Receipt,
+    RecurringFeeTemplate,
     ReportCard,
     School,
     SchoolClass,
@@ -73,6 +74,20 @@ class SchoolProfileSerializer(serializers.ModelSerializer):
 
     phone = serializers.CharField(source="phone_number")
 
+    def validate_default_currency(self, value):
+        normalized = value.strip().upper()
+        if len(normalized) != 3 or not normalized.isalpha():
+            raise serializers.ValidationError("Use a three-letter uppercase currency code.")
+        return normalized
+
+    def validate(self, attrs):
+        currency = attrs.get("default_currency")
+        if currency and self.instance and currency != self.instance.default_currency:
+            has_finance = Fee.objects.filter(school=self.instance).exists() or StudentFeeAssignment.objects.filter(student__school=self.instance).exists() or Payment.objects.filter(student_fee_assignment__student__school=self.instance).exists() or FinancialLedgerEntry.objects.filter(student__school=self.instance).exists()
+            if has_finance:
+                raise serializers.ValidationError({"default_currency": "Currency cannot be changed after financial records exist; this protects historical amounts."})
+        return attrs
+
     def validate_logo(self, logo):
         if logo.size > self.MAX_LOGO_SIZE:
             raise serializers.ValidationError("The logo must be 2 MB or smaller.")
@@ -80,7 +95,7 @@ class SchoolProfileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = School
-        fields = ["name", "email", "phone", "address", "logo"]
+        fields = ["name", "email", "phone", "address", "default_currency", "logo"]
 
 
 class SchoolClassSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
@@ -453,10 +468,29 @@ class FeeSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
         "term": (Term, "academic_year__school"),
         "school_class": (SchoolClass, "school"),
     }
+    academic_year_name = serializers.CharField(source="academic_year.name", read_only=True)
+    term_name = serializers.CharField(source="term.name", read_only=True)
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+
+    def validate(self, attrs):
+        if "school" in self.initial_data or "school_id" in self.initial_data:
+            raise serializers.ValidationError({"school": "School ownership is controlled by the authenticated account."})
+        attrs = serializers.ModelSerializer.validate(self, attrs)
+        currency = attrs.get("currency", getattr(self.instance, "currency", self.get_school().default_currency))
+        if currency != self.get_school().default_currency:
+            raise serializers.ValidationError({"currency": "This school supports its default currency only."})
+        candidate = copy(self.instance) if self.instance is not None else Fee(school=self.get_school())
+        for field_name, value in attrs.items():
+            setattr(candidate, field_name, value)
+        try:
+            candidate.clean()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(getattr(exc, "message_dict", {"non_field_errors": exc.messages})) from exc
+        return attrs
 
     class Meta:
         model = Fee
-        fields = ["id", "academic_year", "term", "school_class", "name", "amount", "due_date", "is_active"]
+        fields = ["id", "academic_year", "academic_year_name", "term", "term_name", "school_class", "class_name", "name", "amount", "currency", "due_date", "is_active"]
         read_only_fields = ["id"]
 
 
@@ -465,20 +499,52 @@ class StudentFeeAssignmentSerializer(SchoolScopedSerializerMixin, serializers.Mo
         "student": (Student, "school_class__school"),
         "fee": (Fee, "school"),
     }
+    student_name = serializers.SerializerMethodField()
+    admission_number = serializers.CharField(source="student.admission_number", read_only=True)
+    fee_name = serializers.CharField(source="fee.name", read_only=True)
+    class_name = serializers.CharField(source="student.school_class.name", read_only=True)
+
+    def get_student_name(self, assignment):
+        return f"{assignment.student.first_name} {assignment.student.last_name}".strip()
+
+    def validate(self, attrs):
+        if "school" in self.initial_data or "school_id" in self.initial_data:
+            raise serializers.ValidationError({"school": "School ownership is controlled by the authenticated account."})
+        return super().validate(attrs)
 
     class Meta:
         model = StudentFeeAssignment
-        fields = ["id", "student", "fee", "amount_owed", "assigned_on"]
+        fields = ["id", "student", "student_name", "admission_number", "class_name", "fee", "fee_name", "amount_owed", "currency", "assigned_on"]
         read_only_fields = ["id"]
 
 
 class PaymentSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
     scoped_related_fields = {"student_fee_assignment": (StudentFeeAssignment, "student__school_class__school")}
+    student_name = serializers.SerializerMethodField()
+    admission_number = serializers.CharField(source="student_fee_assignment.student.admission_number", read_only=True)
+    fee_name = serializers.CharField(source="student_fee_assignment.fee.name", read_only=True)
+    outstanding_before = serializers.SerializerMethodField()
+
+    def get_student_name(self, payment):
+        student = payment.student_fee_assignment.student
+        return f"{student.first_name} {student.last_name}".strip()
+
+    def get_outstanding_before(self, payment):
+        from .finance import assignment_totals
+        _, paid, _ = assignment_totals(payment.student_fee_assignment)
+        return payment.student_fee_assignment.amount_owed - paid + payment.amount
+
+    def validate(self, attrs):
+        if "recorded_by" in self.initial_data:
+            raise serializers.ValidationError({"recorded_by": "The recording administrator is set by the server."})
+        if "school" in self.initial_data or "school_id" in self.initial_data:
+            raise serializers.ValidationError({"school": "School ownership is controlled by the authenticated account."})
+        return super().validate(attrs)
 
     class Meta:
         model = Payment
-        fields = ["id", "student_fee_assignment", "amount", "paid_at", "method", "reference", "notes", "recorded_by", "created_at"]
-        read_only_fields = ["id", "recorded_by", "created_at"]
+        fields = ["id", "student_fee_assignment", "student_name", "admission_number", "fee_name", "amount", "currency", "paid_at", "method", "reference", "notes", "recorded_by", "created_at", "is_reversed", "reversed_at", "reversal_reason", "outstanding_before"]
+        read_only_fields = ["id", "currency", "recorded_by", "created_at", "is_reversed", "reversed_at", "reversal_reason", "outstanding_before"]
 
 
 class FinancialLedgerEntrySerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
@@ -487,19 +553,53 @@ class FinancialLedgerEntrySerializer(SchoolScopedSerializerMixin, serializers.Mo
         "fee_assignment": (StudentFeeAssignment, "student__school_class__school"),
         "payment": (Payment, "student_fee_assignment__student__school_class__school"),
     }
+    student_name = serializers.SerializerMethodField()
+    admission_number = serializers.CharField(source="student.admission_number", read_only=True)
+    debit = serializers.SerializerMethodField()
+    credit = serializers.SerializerMethodField()
+
+    def get_student_name(self, entry):
+        return f"{entry.student.first_name} {entry.student.last_name}".strip()
+
+    def get_debit(self, entry):
+        return entry.amount if entry.entry_type == FinancialLedgerEntry.EntryType.CHARGE else None
+
+    def get_credit(self, entry):
+        return entry.amount if entry.entry_type == FinancialLedgerEntry.EntryType.PAYMENT else None
 
     class Meta:
         model = FinancialLedgerEntry
-        fields = ["id", "student", "entry_type", "amount", "occurred_at", "description", "fee_assignment", "payment", "created_at"]
-        read_only_fields = ["id", "created_at"]
+        fields = ["id", "student", "student_name", "admission_number", "entry_type", "amount", "currency", "debit", "credit", "occurred_at", "description", "fee_assignment", "payment", "created_at"]
+        read_only_fields = fields
 
 
 class ReceiptSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
     scoped_related_fields = {"payment": (Payment, "student_fee_assignment__student__school_class__school")}
+    student_name = serializers.SerializerMethodField()
+    admission_number = serializers.CharField(source="payment.student_fee_assignment.student.admission_number", read_only=True)
+    payment_amount = serializers.DecimalField(source="payment.amount", max_digits=12, decimal_places=2, read_only=True)
+    paid_at = serializers.DateTimeField(source="payment.paid_at", read_only=True)
+    payment_method = serializers.CharField(source="payment.method", read_only=True)
+    reference = serializers.CharField(source="payment.reference", read_only=True)
+    fee_name = serializers.CharField(source="payment.student_fee_assignment.fee.name", read_only=True)
+
+    def get_student_name(self, receipt):
+        student = receipt.payment.student_fee_assignment.student
+        return f"{student.first_name} {student.last_name}".strip()
 
     class Meta:
         model = Receipt
-        fields = ["id", "receipt_number", "payment", "issued_at"]
+        fields = ["id", "receipt_number", "payment", "student_name", "admission_number", "payment_amount", "paid_at", "payment_method", "reference", "fee_name", "issued_at", "is_reversed"]
+        read_only_fields = fields
+
+
+class RecurringFeeTemplateSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    scoped_related_fields = {"academic_year": (AcademicYear, "school"), "term": (Term, "academic_year__school"), "school_class": (SchoolClass, "school")}
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+
+    class Meta:
+        model = RecurringFeeTemplate
+        fields = ["id", "academic_year", "term", "school_class", "class_name", "name", "amount", "currency", "start_month", "end_month", "is_active"]
         read_only_fields = ["id"]
 
 

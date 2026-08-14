@@ -21,17 +21,21 @@ from .views import (
     PaymentViewSet,
     PlatformSchoolViewSet,
     ReceiptViewSet,
+    RecurringFeeTemplateViewSet,
     ReportCardViewSet,
     SchoolClassViewSet,
     SchoolParentStudentViewSet,
     SchoolProfileView,
     SchoolSearchView,
+    SchoolFinanceBalancesView,
+    SchoolStudentFinanceView,
     StudentEnrollmentViewSet,
     StudentFeeAssignmentViewSet,
     StudentViewSet,
     SubjectViewSet,
     TermViewSet,
     TimetableEntryViewSet,
+    ParentStudentFinanceView,
 )
 
 router = DefaultRouter()
@@ -49,6 +53,7 @@ router.register("school/fee-assignments", StudentFeeAssignmentViewSet, basename=
 router.register("school/payments", PaymentViewSet, basename="school-payment")
 router.register("school/ledger", FinancialLedgerEntryViewSet, basename="school-ledger")
 router.register("school/receipts", ReceiptViewSet, basename="school-receipt")
+router.register("school/recurring-fees", RecurringFeeTemplateViewSet, basename="school-recurring-fee")
 router.register("school/results", AcademicResultViewSet, basename="school-result")
 router.register("school/report-cards", ReportCardViewSet, basename="school-report-card")
 router.register("school/notifications", NotificationViewSet, basename="school-notification")
@@ -67,6 +72,9 @@ urlpatterns = [
     path("school/profile/", SchoolProfileView.as_view(), name="school-profile"),
     path("school/search/", SchoolSearchView.as_view(), name="school-search"),
     path("school/available-parents/", AvailableParentView.as_view(), name="school-available-parents"),
+    path("school/finance/balances/", SchoolFinanceBalancesView.as_view(), name="school-finance-balances"),
+    path("school/finance/students/<int:student_id>/", SchoolStudentFinanceView.as_view(), name="school-student-finance"),
     path("parent/students/<int:student_id>/timetable/", ParentStudentTimetableView.as_view(), name="parent-student-timetable"),
+    path("parent/students/<int:student_id>/finance/", ParentStudentFinanceView.as_view(), name="parent-student-finance"),
     path("", include(router.urls)),
 ]

@@ -22,6 +22,7 @@ class School(models.Model):
     phone_number = models.CharField(max_length=30)
     address = models.TextField(blank=True)
     logo = models.ImageField(upload_to="school_logos/", blank=True)
+    default_currency = models.CharField(max_length=3, default="USD")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -248,15 +249,21 @@ class Fee(models.Model):
     school_class = models.ForeignKey(SchoolClass, on_delete=models.PROTECT, related_name="fees", null=True, blank=True)
     name = models.CharField(max_length=150)
     amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))])
+    currency = models.CharField(max_length=3, default="USD")
     due_date = models.DateField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
+    recurring_template = models.ForeignKey("RecurringFeeTemplate", on_delete=models.PROTECT, related_name="generated_fees", null=True, blank=True)
+    charge_month = models.DateField(null=True, blank=True)
 
     class Meta:
         indexes = [models.Index(fields=["school", "academic_year", "term"])]
+        constraints = [models.UniqueConstraint(fields=["recurring_template", "charge_month"], condition=Q(recurring_template__isnull=False), name="unique_recurring_fee_month")]
 
     def clean(self):
         if self.academic_year.school_id != self.school_id or self.term.academic_year_id != self.academic_year_id:
             raise ValidationError("Fee, academic year, and term must match the same school and year.")
+        if self.currency != self.school.default_currency:
+            raise ValidationError({"currency": "This school currently supports its default currency only."})
         if self.school_class_id and self.school_class.school_id != self.school_id:
             raise ValidationError({"school_class": "The class must belong to this fee's school."})
 
@@ -265,6 +272,7 @@ class StudentFeeAssignment(models.Model):
     student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="fee_assignments")
     fee = models.ForeignKey(Fee, on_delete=models.PROTECT, related_name="student_assignments")
     amount_owed = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal("0.00"))])
+    currency = models.CharField(max_length=3, default="USD")
     assigned_on = models.DateField()
 
     class Meta:
@@ -274,17 +282,24 @@ class StudentFeeAssignment(models.Model):
     def clean(self):
         if self.student.school_class.school_id != self.fee.school_id:
             raise ValidationError("Student and fee must belong to the same school.")
+        if self.currency != self.fee.currency:
+            raise ValidationError({"currency": "Assignment currency must match the fee currency."})
 
 
 class Payment(models.Model):
     student_fee_assignment = models.ForeignKey(StudentFeeAssignment, on_delete=models.PROTECT, related_name="payments")
     amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))])
+    currency = models.CharField(max_length=3, default="USD")
     paid_at = models.DateTimeField()
     method = models.CharField(max_length=30)
     reference = models.CharField(max_length=100, blank=True)
     recorded_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="recorded_payments")
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    is_reversed = models.BooleanField(default=False)
+    reversed_at = models.DateTimeField(null=True, blank=True)
+    reversed_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="reversed_payments", null=True, blank=True)
+    reversal_reason = models.TextField(blank=True)
 
     class Meta:
         indexes = [models.Index(fields=["student_fee_assignment", "paid_at"])]
@@ -299,6 +314,7 @@ class FinancialLedgerEntry(models.Model):
     student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="ledger_entries")
     entry_type = models.CharField(max_length=20, choices=EntryType.choices)
     amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))])
+    currency = models.CharField(max_length=3, default="USD")
     occurred_at = models.DateTimeField()
     description = models.CharField(max_length=255)
     fee_assignment = models.ForeignKey(StudentFeeAssignment, on_delete=models.PROTECT, related_name="ledger_entries", null=True, blank=True)
@@ -319,6 +335,30 @@ class Receipt(models.Model):
     receipt_number = models.CharField(max_length=50, unique=True)
     payment = models.OneToOneField(Payment, on_delete=models.PROTECT, related_name="receipt")
     issued_at = models.DateTimeField()
+    is_reversed = models.BooleanField(default=False)
+
+
+class RecurringFeeTemplate(models.Model):
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="recurring_fee_templates")
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name="recurring_fee_templates")
+    term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="recurring_fee_templates")
+    school_class = models.ForeignKey(SchoolClass, on_delete=models.PROTECT, related_name="recurring_fee_templates", null=True, blank=True)
+    name = models.CharField(max_length=150)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))])
+    currency = models.CharField(max_length=3)
+    start_month = models.DateField()
+    end_month = models.DateField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+
+    def clean(self):
+        if self.academic_year.school_id != self.school_id or self.term.academic_year_id != self.academic_year_id:
+            raise ValidationError("Recurring fee template must use the school's academic year and term.")
+        if self.school_class_id and self.school_class.school_id != self.school_id:
+            raise ValidationError({"school_class": "The class must belong to this school."})
+        if self.currency != self.school.default_currency:
+            raise ValidationError({"currency": "This school currently supports its default currency only."})
+        if self.end_month and self.end_month < self.start_month:
+            raise ValidationError({"end_month": "End month cannot be before start month."})
 
 
 class AcademicResult(models.Model):

@@ -12,11 +12,13 @@ from .models import (
     AcademicYear,
     ClassSubject,
     Fee,
+    FinancialLedgerEntry,
     Notification,
     Parent,
     ParentStudent,
     Payment,
     Receipt,
+    RecurringFeeTemplate,
     ReportCard,
     School,
     SchoolAdministrator,
@@ -120,6 +122,7 @@ class TenantIsolationTests(APITestCase):
             "email": "a@example.test",
             "phone": "100",
             "address": "1 Alpha Road",
+            "default_currency": "USD",
             "logo": "http://testserver/media/school_logos/school-a.png",
         })
 
@@ -134,6 +137,7 @@ class TenantIsolationTests(APITestCase):
             "email": "b@example.test",
             "phone": "200",
             "address": "",
+            "default_currency": "USD",
             "logo": None,
         })
 
@@ -687,6 +691,113 @@ class TenantIsolationTests(APITestCase):
         response = self.client.get(f"/api/school/results/?academic_year={self.year_b.id}")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data, [])
+
+    def test_finance_payment_is_atomic_partial_and_generates_receipt_and_ledger(self):
+        self.authenticate(self.admin_a)
+        response = self.client.post("/api/school/payments/", {
+            "student_fee_assignment": self.assignment_a.id,
+            "amount": "20.00",
+            "paid_at": "2025-06-14T09:30:00Z",
+            "method": "cash",
+            "reference": "HIST-20",
+            "recorded_by": self.admin_b.id,
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("recorded_by", response.data)
+        response = self.client.post("/api/school/payments/", {
+            "student_fee_assignment": self.assignment_a.id,
+            "amount": "20.00",
+            "paid_at": "2025-06-14T09:30:00Z",
+            "method": "cash",
+            "reference": "HIST-20",
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        payment = Payment.objects.get(pk=response.data["id"])
+        self.assertEqual(payment.paid_at.date(), date(2025, 6, 14))
+        self.assertEqual(payment.recorded_by, self.admin_a)
+        self.assertTrue(hasattr(payment, "receipt"))
+        self.assertTrue(hasattr(payment, "ledger_entry"))
+        self.assertEqual(payment.ledger_entry.entry_type, "payment")
+        self.assertEqual(payment.receipt.receipt_number, response.data["receipt_number"])
+        overpayment = self.client.post("/api/school/payments/", {
+            "student_fee_assignment": self.assignment_a.id,
+            "amount": "56.00",
+            "paid_at": "2026-01-11T09:30:00Z",
+            "method": "cash",
+        }, format="json")
+        self.assertEqual(overpayment.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("amount", overpayment.data)
+
+    def test_finance_is_tenant_scoped_and_parent_finance_is_child_scoped(self):
+        self.authenticate(self.admin_a)
+        self.assertEqual([item["id"] for item in self.client.get("/api/school/finance/balances/").data], [self.student_a.id])
+        self.assertEqual(self.client.get(f"/api/school/finance/students/{self.student_b.id}/").status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(self.client.get(f"/api/school/receipts/{self.receipt_b.id}/").status_code, status.HTTP_404_NOT_FOUND)
+        self.authenticate(self.parent_a_user)
+        own = self.client.get(f"/api/parent/students/{self.student_a.id}/finance/")
+        self.assertEqual(own.status_code, status.HTTP_200_OK)
+        self.assertEqual(own.data["student"]["id"], self.student_a.id)
+        self.assertEqual(self.client.get(f"/api/parent/students/{self.student_b.id}/finance/").status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(self.client.post("/api/parent/payments/", {}, format="json").status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_bulk_fee_assignment_creates_only_missing_student_assignments(self):
+        fee = Fee.objects.create(school=self.school_a, academic_year=self.year_a, term=self.term_a, school_class=self.class_a, name="Activity", amount=Decimal("30.00"))
+        second = self.make_student(self.class_a, "A-SECOND", "Second")
+        self.authenticate(self.admin_a)
+        response = self.client.post("/api/school/fee-assignments/assign-to-class/", {"school_class": self.class_a.id, "fee": fee.id, "assigned_on": "2026-01-10"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["assignments_created"], 2)
+        response = self.client.post("/api/school/fee-assignments/assign-to-class/", {"school_class": self.class_a.id, "fee": fee.id, "assigned_on": "2026-01-10"}, format="json")
+        self.assertEqual(response.data["assignments_created"], 0)
+        self.assertEqual(response.data["already_assigned"], 2)
+        self.assertEqual(StudentFeeAssignment.objects.filter(student=second, fee=fee).count(), 1)
+
+    def test_payment_reversal_preserves_history_and_restores_balance(self):
+        self.authenticate(self.admin_a)
+        payment_response = self.client.post("/api/school/payments/", {"student_fee_assignment": self.assignment_a.id, "amount": "20.00", "paid_at": "2026-02-01T09:00:00Z", "method": "cash"}, format="json")
+        payment_id = payment_response.data["id"]
+        receipt_id = payment_response.data["receipt_id"]
+        response = self.client.post(f"/api/school/payments/{payment_id}/reverse/", {"reason": "Entered twice"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        payment = Payment.objects.get(pk=payment_id)
+        self.assertTrue(payment.is_reversed)
+        self.assertTrue(Receipt.objects.get(pk=receipt_id).is_reversed)
+        self.assertEqual(FinancialLedgerEntry.objects.filter(payment=payment).count(), 1)
+        self.assertEqual(FinancialLedgerEntry.objects.filter(student=self.student_a, description__startswith="Payment reversal").count(), 1)
+        self.assertEqual(self.client.post(f"/api/school/payments/{payment_id}/reverse/", {"reason": "Again"}, format="json").status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.client.post(f"/api/school/payments/{self.payment_b.id}/reverse/", {"reason": "Attack"}, format="json").status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_receipt_pdf_and_recurring_generation_are_tenant_safe_and_idempotent(self):
+        self.authenticate(self.admin_a)
+        pdf = self.client.get(f"/api/school/receipts/{self.receipt_a.id}/pdf/")
+        self.assertEqual(pdf.status_code, status.HTTP_200_OK)
+        self.assertEqual(pdf["Content-Type"], "application/pdf")
+        self.assertTrue(pdf.content.startswith(b"%PDF"))
+        self.assertEqual(self.client.get(f"/api/school/receipts/{self.receipt_b.id}/pdf/").status_code, status.HTTP_404_NOT_FOUND)
+        template = RecurringFeeTemplate.objects.create(school=self.school_a, academic_year=self.year_a, term=self.term_a, school_class=self.class_a, name="Monthly tuition", amount=Decimal("40.00"), currency="USD", start_month=date(2026, 1, 1))
+        response = self.client.post("/api/school/recurring-fees/generate/", {"month": "2026-02-01"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["fees_created"], 1)
+        self.assertEqual(self.client.post("/api/school/recurring-fees/generate/", {"month": "2026-02-01"}, format="json").data["fees_created"], 0)
+        self.assertEqual(self.client.post("/api/school/recurring-fees/generate/", {"month": "2026-03-01"}, format="json").data["fees_created"], 1)
+        self.authenticate(self.parent_a_user)
+        self.assertEqual(self.client.get(f"/api/parent/receipts/{self.receipt_a.id}/pdf/").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.post("/api/school/recurring-fees/generate/", {"month": "2026-04-01"}, format="json").status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_school_currency_is_profile_scoped_and_future_finance_inherits_it(self):
+        school = School.objects.create(name="Currency School", email="currency@example.test", phone_number="900")
+        admin = self.make_user("currency-admin", User.Role.SCHOOL_ADMIN)
+        SchoolAdministrator.objects.create(user=admin, school=school)
+        school_class, year, term = self.make_school_calendar(school, "C")
+        self.authenticate(admin)
+        response = self.client.patch("/api/school/profile/", {"default_currency": "zar"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["default_currency"], "ZAR")
+        fee = self.client.post("/api/school/fees/", {"name": "Currency fee", "academic_year": year.id, "term": term.id, "amount": "20.00", "currency": "ZAR"}, format="json")
+        self.assertEqual(fee.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(fee.data["currency"], "ZAR")
+        self.assertEqual(self.client.patch("/api/school/profile/", {"default_currency": "USD"}, format="json").status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_parent_can_access_only_linked_children_and_private_records(self):
         self.authenticate(self.parent_a_user)

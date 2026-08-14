@@ -16,6 +16,8 @@ import SchoolSettingsPage from './pages/SchoolSettingsPage'
 import StudentsPage from './pages/StudentsPage'
 import StudentDetailPage from './pages/StudentDetailPage'
 import StudentFormPage from './pages/StudentFormPage'
+import FinanceRecordsPage from './pages/FinanceRecordsPage'
+import StudentFinancePage from './pages/StudentFinancePage'
 import './App.css'
 
 function App() {
@@ -40,6 +42,8 @@ function App() {
             <Route path="/school/academics" element={<AcademicsPage />} />
             <Route path="/school/academics/:resource" element={<AcademicRecordsPage />} />
             <Route path="/school/finance" element={<FinancePage />} />
+            <Route path="/school/finance/:resource" element={<FinanceRecordsPage />} />
+            <Route path="/school/finance/students/:studentId" element={<StudentFinancePage />} />
             <Route path="/school/communication" element={<CommunicationPage />} />
             <Route path="/school/settings" element={<SchoolSettingsPage />} />
           </Route>
