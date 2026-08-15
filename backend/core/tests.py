@@ -1,5 +1,10 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from io import BytesIO
+import tempfile
+from zipfile import ZipFile
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
@@ -18,6 +23,9 @@ from .models import (
     Expense,
     Fee,
     FinancialLedgerEntry,
+    Homework,
+    HomeworkAttachment,
+    homework_attachment_expiry,
     Notification,
     Parent,
     ParentCommunicationPreference,
@@ -37,6 +45,7 @@ from .models import (
     Term,
     User,
 )
+from PIL import Image
 
 
 class TenantIsolationTests(APITestCase):
@@ -1095,3 +1104,153 @@ class FinalHardeningTests(APITestCase):
         self.assertTrue(demo.is_demo)
         self.assertEqual(demo.students.count(), 24)
         self.assertEqual(Parent.objects.get(school=demo, user__username="demo.parent").student_links.count(), 2)
+
+
+class HomeworkTests(APITestCase):
+    def setUp(self):
+        self.media = tempfile.TemporaryDirectory()
+        self.settings_override = override_settings(MEDIA_ROOT=self.media.name)
+        self.settings_override.enable()
+        self.school = School.objects.create(name="Homework School", email="homework@example.test", phone_number="1")
+        self.other_school = School.objects.create(name="Other School", email="other-homework@example.test", phone_number="2")
+        self.admin = User.objects.create_user(username="homework-admin", password="pass", role=User.Role.SCHOOL_ADMIN)
+        self.other_admin = User.objects.create_user(username="other-homework-admin", password="pass", role=User.Role.SCHOOL_ADMIN)
+        SchoolAdministrator.objects.create(user=self.admin, school=self.school)
+        SchoolAdministrator.objects.create(user=self.other_admin, school=self.other_school)
+        self.school_class = SchoolClass.objects.create(school=self.school, name="Grade 4")
+        self.other_class = SchoolClass.objects.create(school=self.other_school, name="Grade 9")
+        self.subject = Subject.objects.create(school=self.school, name="Science", code="SCI")
+        self.other_subject = Subject.objects.create(school=self.other_school, name="History", code="HIS")
+        self.year = AcademicYear.objects.create(school=self.school, name="2026", start_date=date(2026, 1, 1), end_date=date(2026, 12, 31), is_current=True)
+        self.student = Student.objects.create(school=self.school, school_class=self.school_class, admission_number="H-1", first_name="Ada", last_name="One", date_of_birth=date(2017, 1, 1), enrolled_on=date(2026, 1, 1))
+        StudentEnrollment.objects.create(student=self.student, school_class=self.school_class, academic_year=self.year, enrolled_on=date(2026, 1, 1))
+        self.parent_user = User.objects.create_user(username="homework-parent", password="pass", role=User.Role.PARENT)
+        self.parent = Parent.objects.create(school=self.school, user=self.parent_user, phone_number="3")
+        ParentStudent.objects.create(parent=self.parent, student=self.student)
+
+    def tearDown(self):
+        self.settings_override.disable()
+        self.media.cleanup()
+
+    def payload(self, **changes):
+        values = {"title": "Read chapter", "instructions": "Pages 1-3", "school_class": self.school_class.id, "subject": self.subject.id, "date_assigned": "2026-02-01", "due_date": "2026-02-05", "status": "published"}
+        values.update(changes)
+        return values
+
+    def png(self, name="work.png"):
+        output = BytesIO(); Image.new("RGB", (2, 2), "red").save(output, "PNG")
+        return SimpleUploadedFile(name, output.getvalue(), content_type="image/png")
+
+    def docx(self):
+        output = BytesIO()
+        with ZipFile(output, "w") as archive:
+            archive.writestr("[Content_Types].xml", "<Types/>")
+            archive.writestr("word/document.xml", "<document/>")
+        return SimpleUploadedFile("work.docx", output.getvalue(), content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+    def create(self, **changes):
+        self.client.force_authenticate(self.admin)
+        return self.client.post("/api/school/homework/", self.payload(**changes), format="multipart")
+
+    def test_text_only_homework_and_server_owned_tenant(self):
+        response = self.create(instructions="Typed only")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        item = Homework.objects.get(pk=response.data["id"])
+        self.assertEqual((item.school, item.created_by), (self.school, self.admin))
+
+    def test_image_document_and_several_attachments(self):
+        response = self.create(uploaded_attachments=[self.png(), self.docx(), SimpleUploadedFile("notes.pdf", b"%PDF-1.4\n%%EOF", content_type="application/pdf")])
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(response.data["attachments"]), 3)
+        self.assertNotIn("file", response.data["attachments"][0])
+
+    def test_image_only_homework(self):
+        response = self.create(instructions="", uploaded_attachments=[self.png()])
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["attachments"][0]["content_type"], "image/png")
+
+    def test_document_only_homework(self):
+        response = self.create(instructions="", uploaded_attachments=[self.docx()])
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(response.data["attachments"]), 1)
+
+    def test_draft_hidden_and_published_visible_to_correct_parent(self):
+        draft = self.create(status="draft").data["id"]
+        published = self.create(title="Visible").data["id"]
+        self.client.force_authenticate(self.parent_user)
+        response = self.client.get(f"/api/parent/homework/?student={self.student.id}")
+        self.assertEqual([item["id"] for item in response.data], [published])
+        self.assertEqual(self.client.get(f"/api/parent/homework/{draft}/?student={self.student.id}").status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_parent_with_several_children_selects_each_child(self):
+        other_class = SchoolClass.objects.create(school=self.school, name="Grade 5")
+        child = Student.objects.create(school=self.school, school_class=other_class, admission_number="H-2", first_name="Ben", last_name="Two", date_of_birth=date(2016, 1, 1), enrolled_on=date(2026, 1, 1))
+        StudentEnrollment.objects.create(student=child, school_class=other_class, academic_year=self.year, enrolled_on=date(2026, 1, 1))
+        ParentStudent.objects.create(parent=self.parent, student=child)
+        first = self.create(title="First child").data["id"]
+        second = self.create(title="Second child", school_class=other_class.id, subject="").data["id"]
+        self.client.force_authenticate(self.parent_user)
+        self.assertEqual([x["id"] for x in self.client.get(f"/api/parent/homework/?student={self.student.id}").data], [first])
+        self.assertEqual([x["id"] for x in self.client.get(f"/api/parent/homework/?student={child.id}").data], [second])
+
+    def test_parent_blocked_from_unlinked_child_and_admin_cross_school_object(self):
+        stranger = Student.objects.create(school=self.school, school_class=self.school_class, admission_number="H-3", first_name="Cid", last_name="Three", date_of_birth=date(2016, 1, 1), enrolled_on=date(2026, 1, 1))
+        self.client.force_authenticate(self.parent_user)
+        self.assertEqual(self.client.get(f"/api/parent/homework/?student={stranger.id}").status_code, status.HTTP_404_NOT_FOUND)
+        homework_id = self.create().data["id"]
+        self.client.force_authenticate(self.other_admin)
+        self.assertEqual(self.client.get(f"/api/school/homework/{homework_id}/").status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(self.client.patch(f"/api/school/homework/{homework_id}/", {"title": "No"}, format="json").status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(self.client.delete(f"/api/school/homework/{homework_id}/").status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_invalid_and_oversized_files_rejected(self):
+        self.assertEqual(self.create(uploaded_attachments=[SimpleUploadedFile("fake.pdf", b"not pdf")]).status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.create(uploaded_attachments=[SimpleUploadedFile("huge.pdf", b"%PDF-" + b"x" * (10 * 1024 * 1024))]).status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cross_school_class_and_subject_rejected(self):
+        self.assertEqual(self.create(school_class=self.other_class.id).status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.create(subject=self.other_subject.id).status_code, status.HTTP_400_BAD_REQUEST)
+        response = self.create(school_id=self.other_school.id)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_unauthorised_attachment_download_and_removal_rejected(self):
+        response = self.create(uploaded_attachments=[self.png()])
+        homework_id, attachment_id = response.data["id"], response.data["attachments"][0]["id"]
+        self.client.force_authenticate(self.other_admin)
+        self.assertEqual(self.client.get(f"/api/school/homework/{homework_id}/attachments/{attachment_id}/download/").status_code, status.HTTP_404_NOT_FOUND)
+        self.client.force_authenticate(self.parent_user)
+        self.assertEqual(self.client.get(f"/api/parent/homework/{homework_id}/attachments/{attachment_id}/download/?student=999999").status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(self.client.delete(f"/api/parent/homework/{homework_id}/attachments/{attachment_id}/").status_code, status.HTTP_404_NOT_FOUND)
+        self.client.force_authenticate(user=None)
+        self.assertEqual(self.client.get(f"/media/homework/{self.school.id}/{homework_id}/work.png").status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_historical_visibility_uses_assignment_date_enrolment(self):
+        old_class = SchoolClass.objects.create(school=self.school, name="Grade 3")
+        enrollment = self.student.enrollments.get()
+        enrollment.school_class = old_class; enrollment.left_on = date(2026, 1, 31); enrollment.save()
+        StudentEnrollment.objects.create(student=self.student, school_class=self.school_class, academic_year=self.year, enrolled_on=date(2026, 2, 1))
+        old = self.create(title="Old", school_class=old_class.id, subject="", date_assigned="2026-01-20", due_date="2026-01-25").data["id"]
+        self.client.force_authenticate(self.parent_user)
+        self.assertEqual(self.client.get(f"/api/parent/homework/?student={self.student.id}").data, [])
+        self.assertEqual([x["id"] for x in self.client.get(f"/api/parent/homework/?student={self.student.id}&history=true").data], [old])
+
+    def test_attachment_expiry_policy(self):
+        utc = ZoneInfo("UTC")
+        with patch("core.models.timezone.now", return_value=datetime(2026, 8, 13, 10, tzinfo=utc)):
+            self.assertEqual(homework_attachment_expiry(), datetime(2026, 8, 14, 10, tzinfo=utc))
+        with patch("core.models.timezone.now", return_value=datetime(2026, 8, 14, 10, tzinfo=utc)):
+            self.assertEqual(homework_attachment_expiry(), datetime(2026, 8, 17, 6, tzinfo=utc))
+
+    def test_expired_attachment_is_hidden_blocked_and_physically_purged(self):
+        response = self.create(uploaded_attachments=[self.png()])
+        homework_id = response.data["id"]
+        attachment = HomeworkAttachment.objects.get(homework_id=homework_id)
+        stored_name = attachment.file.name
+        attachment.expires_at = timezone.now() - timedelta(seconds=1)
+        attachment.save(update_fields=["expires_at"])
+        self.assertTrue(attachment.file.storage.exists(stored_name))
+        self.assertEqual(self.client.get(f"/api/school/homework/{homework_id}/").data["attachments"], [])
+        self.assertEqual(self.client.get(f"/api/school/homework/{homework_id}/attachments/{attachment.id}/download/").status_code, status.HTTP_404_NOT_FOUND)
+        call_command("purge_expired_homework_attachments")
+        self.assertFalse(HomeworkAttachment.objects.filter(pk=attachment.pk).exists())
+        self.assertFalse(attachment.file.storage.exists(stored_name))

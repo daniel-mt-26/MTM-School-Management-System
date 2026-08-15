@@ -64,3 +64,22 @@ export async function apiClient(path, options = {}, retried = false) {
   }
   return data
 }
+
+export async function apiDownload(path, filename) {
+  const access = tokenStorage.getAccess()
+  const response = await fetch(`${API_BASE_URL}${path}`, { headers: access ? { Authorization: `Bearer ${access}` } : {} })
+  if (!response.ok) throw new Error('Download failed')
+  const url = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = url; link.download = filename; document.body.appendChild(link); link.click(); link.remove()
+  URL.revokeObjectURL(url)
+}
+
+export async function apiOpen(path) {
+  const access = tokenStorage.getAccess()
+  const response = await fetch(`${API_BASE_URL}${path}`, { headers: access ? { Authorization: `Bearer ${access}` } : {} })
+  if (!response.ok) throw new Error('Open failed')
+  const url = URL.createObjectURL(await response.blob())
+  window.open(url, '_blank', 'noopener,noreferrer')
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000)
+}

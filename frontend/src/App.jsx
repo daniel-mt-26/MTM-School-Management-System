@@ -19,6 +19,8 @@ import StudentDetailPage from './pages/StudentDetailPage'
 import StudentFormPage from './pages/StudentFormPage'
 import FinanceRecordsPage from './pages/FinanceRecordsPage'
 import StudentFinancePage from './pages/StudentFinancePage'
+import HomeworkPage from './pages/HomeworkPage'
+import ParentHomeworkPage from './pages/ParentHomeworkPage'
 import './App.css'
 
 function App() {
@@ -41,6 +43,7 @@ function App() {
             <Route path="/school/parents/:parentId" element={<ParentDetailPage />} />
             <Route path="/school/parents/:parentId/edit" element={<ParentFormPage />} />
             <Route path="/school/academics" element={<AcademicsPage />} />
+            <Route path="/school/academics/homework" element={<HomeworkPage />} />
             <Route path="/school/academics/:resource" element={<AcademicRecordsPage />} />
             <Route path="/school/finance" element={<FinancePage />} />
             <Route path="/school/finance/:resource" element={<FinanceRecordsPage />} />
@@ -52,6 +55,7 @@ function App() {
           </Route>
           <Route element={<ProtectedRoute allowedRole="parent" />}>
             <Route path="/parent" element={<ParentDashboard />} />
+            <Route path="/parent/homework" element={<ParentHomeworkPage />} />
           </Route>
           <Route path="/" element={<Navigate to="/login" replace />} />
           <Route path="*" element={<Navigate to="/login" replace />} />

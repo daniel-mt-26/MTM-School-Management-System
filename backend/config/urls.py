@@ -18,10 +18,16 @@ from django.contrib import admin
 from django.conf import settings
 from django.conf.urls.static import static
 from django.urls import include, path
+from django.http import Http404
+
+
+def deny_private_homework_media(request, path):
+    raise Http404
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('core.urls')),
+    path('media/homework/<path:path>', deny_private_homework_media),
 ]
 
 if settings.DEBUG:

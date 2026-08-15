@@ -1,0 +1,15 @@
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { apiClient } from '../api/client'
+import { downloadHomeworkAttachment, getParentHomework, openHomeworkAttachment } from '../api/homework'
+
+export default function ParentHomeworkPage() {
+  const [students, setStudents] = useState([]); const [selected, setSelected] = useState(''); const [items, setItems] = useState([]); const [history, setHistory] = useState(false)
+  const [loading, setLoading] = useState(true); const [error, setError] = useState('')
+  useEffect(() => { apiClient('/parent/students/').then((values) => { setStudents(values); setSelected(values[0] ? String(values[0].id) : '') }).catch(() => setError('Your children could not be loaded.')).finally(() => setLoading(false)) }, [])
+  useEffect(() => { if (selected) getParentHomework(selected, history).then((values) => { setItems(values); setError('') }).catch(() => setError('Homework could not be loaded.')).finally(() => setLoading(false)) }, [selected, history])
+  const child = students.find((item) => String(item.id) === selected)
+  return <main className="student-page"><header className="student-page-header"><div><Link to="/parent" className="dashboard-link">Back to Parent Portal</Link><h1>Homework</h1><p>Published homework for your linked children.</p></div></header>{error && <p className="form-error">{error}</p>}
+    {students.length > 0 && <section className="profile-section"><div className="form-columns"><label>Child<select value={selected} onChange={(e) => setSelected(e.target.value)}>{students.map((item) => <option key={item.id} value={item.id}>{item.display_name} · {item.class_name}</option>)}</select></label><label>View<select value={history ? 'history' : 'current'} onChange={(e) => setHistory(e.target.value === 'history')}><option value="current">Current class</option><option value="history">Homework history</option></select></label></div></section>}
+    {loading ? <div className="student-state">Loading homework…</div> : !students.length ? <div className="student-state">No children are linked to this account.</div> : items.length ? <section className="history-list">{items.map((item) => <article key={item.id} className="profile-section"><h2>{item.title}</h2><p><strong>Child:</strong> {child?.display_name}<br /><strong>Class:</strong> {item.class_name}<br /><strong>Subject:</strong> {item.subject_name || 'General'}<br /><strong>Assigned:</strong> {item.date_assigned}<br /><strong>Due:</strong> {item.due_date}</p>{item.instructions && <p className="homework-instructions">{item.instructions}</p>}<div>{item.attachments.map((attachment) => <span key={attachment.id}>{attachment.content_type.startsWith('image/') && <button className="inline-button" onClick={() => openHomeworkAttachment(item.id, attachment, selected)}>Open image</button>}<button className="inline-button" onClick={() => downloadHomeworkAttachment('parent', item.id, attachment, selected)}>Download {attachment.original_name}</button></span>)}</div></article>)}</section> : <div className="student-state">No published homework is available for this selection.</div>}</main>
+}

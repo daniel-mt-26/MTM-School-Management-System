@@ -5,6 +5,10 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator, RegexValidator
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
+from zoneinfo import ZoneInfo
+from datetime import datetime, time, timedelta
+from django.conf import settings
 
 
 class User(AbstractUser):
@@ -241,6 +245,80 @@ class StudentEnrollment(models.Model):
             raise ValidationError("A student enrollment must remain within the student's school.")
         if self.left_on and self.left_on < self.enrolled_on:
             raise ValidationError({"left_on": "The leaving date cannot be before the enrollment date."})
+
+
+class Homework(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        PUBLISHED = "published", "Published"
+
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="homework")
+    school_class = models.ForeignKey(SchoolClass, on_delete=models.PROTECT, related_name="homework")
+    subject = models.ForeignKey(Subject, on_delete=models.PROTECT, related_name="homework", null=True, blank=True)
+    title = models.CharField(max_length=200)
+    instructions = models.TextField(blank=True)
+    date_assigned = models.DateField(default=timezone.localdate)
+    due_date = models.DateField()
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.DRAFT)
+    created_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="homework_created")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date_assigned", "-created_at"]
+        constraints = [models.CheckConstraint(condition=Q(due_date__gte=models.F("date_assigned")), name="homework_due_not_before_assigned")]
+        indexes = [models.Index(fields=["school", "school_class", "status", "due_date"], name="homework_school_filter_idx")]
+
+    def clean(self):
+        if self.school_class_id and self.school_id != self.school_class.school_id:
+            raise ValidationError({"school_class": "The class must belong to the homework school."})
+        if self.subject_id and self.school_id != self.subject.school_id:
+            raise ValidationError({"subject": "The subject must belong to the homework school."})
+        if self.created_by_id:
+            try:
+                administrator_school_id = self.created_by.school_administrator.school_id
+            except SchoolAdministrator.DoesNotExist:
+                raise ValidationError({"created_by": "Homework must be created by a school administrator."})
+            if self.school_id != administrator_school_id:
+                raise ValidationError({"created_by": "The administrator must belong to the homework school."})
+        if self.date_assigned and self.due_date and self.due_date < self.date_assigned:
+            raise ValidationError({"due_date": "Due date cannot be before the assigned date."})
+
+
+def homework_attachment_path(instance, filename):
+    safe_name = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    return f"homework/{instance.homework.school_id}/{instance.homework_id}/{safe_name}"
+
+
+def homework_attachment_expiry():
+    now = timezone.now()
+    retention_zone = ZoneInfo(getattr(settings, "HOMEWORK_RETENTION_TIME_ZONE", settings.TIME_ZONE))
+    local_now = now.astimezone(retention_zone)
+    if local_now.weekday() >= 4:  # Friday through Sunday remain available all weekend.
+        days_until_monday = (7 - local_now.weekday()) % 7
+        if days_until_monday == 0:
+            days_until_monday = 7
+        local_expiry = datetime.combine(local_now.date() + timedelta(days=days_until_monday), time(hour=8), retention_zone)
+        return local_expiry.astimezone(ZoneInfo("UTC"))
+    return now + timedelta(hours=24)
+
+
+class HomeworkAttachment(models.Model):
+    homework = models.ForeignKey(Homework, on_delete=models.CASCADE, related_name="attachments")
+    file = models.FileField(upload_to=homework_attachment_path, max_length=500)
+    original_name = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=100)
+    size = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(default=homework_attachment_expiry, db_index=True)
+
+    class Meta:
+        ordering = ["id"]
+        indexes = [models.Index(fields=["homework"], name="homework_attachment_idx")]
+
+    def clean(self):
+        if self.homework_id and self.homework.school_id != self.homework.school_class.school_id:
+            raise ValidationError("Attachment homework must have consistent school ownership.")
 
 
 class Fee(models.Model):

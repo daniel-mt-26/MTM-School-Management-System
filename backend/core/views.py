@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.db import connection
-from django.db.models import Prefetch, Q
+from django.db.models import Exists, OuterRef, Prefetch, Q
 from django.http import FileResponse, Http404
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -16,6 +16,7 @@ from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import MethodNotAllowed, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
@@ -31,6 +32,8 @@ from .models import (
     Expense,
     Fee,
     FinancialLedgerEntry,
+    Homework,
+    HomeworkAttachment,
     Notification,
     Parent,
     ParentCommunicationPreference,
@@ -73,6 +76,7 @@ from .serializers import (
     FeeSerializer,
     ExpenseSerializer,
     FinancialLedgerEntrySerializer,
+    HomeworkSerializer,
     NotificationSerializer,
     ParentPaymentSerializer,
     ParentCommunicationPreferenceSerializer,
@@ -82,6 +86,7 @@ from .serializers import (
     ParentReceiptSerializer,
     ParentReportCardSerializer,
     ParentNotificationSerializer,
+    ParentHomeworkSerializer,
     ParentResultSerializer,
     ParentStudentSerializer,
     PaymentSerializer,
@@ -1280,6 +1285,70 @@ class ParentReportCardViewSet(ReportCardDownloadMixin, ParentReadOnlyViewSet):
     queryset = ReportCard.objects.all()
     serializer_class = ParentReportCardSerializer
     parent_lookup = "student_enrollment__student__parent_links__parent"
+
+
+class HomeworkAttachmentActionsMixin:
+    def _attachment(self, homework, attachment_id):
+        return get_object_or_404(HomeworkAttachment, pk=attachment_id, homework=homework, expires_at__gt=timezone.now())
+
+    @action(detail=True, methods=["get"], url_path=r"attachments/(?P<attachment_id>[^/.]+)/download")
+    def download_attachment(self, request, attachment_id=None, *args, **kwargs):
+        attachment = self._attachment(self.get_object(), attachment_id)
+        try:
+            return FileResponse(attachment.file.open("rb"), as_attachment=True, filename=attachment.original_name, content_type=attachment.content_type)
+        except FileNotFoundError as exc:
+            raise Http404("Attachment file is unavailable.") from exc
+
+
+class HomeworkViewSet(HomeworkAttachmentActionsMixin, SchoolAdminViewSet):
+    queryset = Homework.objects.all()
+    serializer_class = HomeworkSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_queryset(self):
+        queryset = super().get_queryset().select_related("school_class", "subject", "created_by").prefetch_related("attachments")
+        for param, lookup in {"school_class": "school_class_id", "subject": "subject_id", "due_date": "due_date", "status": "status"}.items():
+            if value := self.request.query_params.get(param):
+                queryset = queryset.filter(**{lookup: value})
+        return queryset
+
+    def perform_create(self, serializer):
+        serializer.save(school=self.get_school(), created_by=self.request.user)
+
+    @action(detail=True, methods=["delete"], url_path=r"attachments/(?P<attachment_id>[^/.]+)")
+    def remove_attachment(self, request, attachment_id=None, *args, **kwargs):
+        attachment = self._attachment(self.get_object(), attachment_id)
+        attachment.file.delete(save=False)
+        attachment.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ParentHomeworkViewSet(HomeworkAttachmentActionsMixin, viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsParent]
+    serializer_class = ParentHomeworkSerializer
+
+    def get_queryset(self):
+        parent = self.request.user.parent_profile
+        student_id = self.request.query_params.get("student")
+        if not student_id:
+            return Homework.objects.none()
+        student = get_object_or_404(Student.objects.filter(parent_links__parent=parent).distinct(), pk=student_id)
+        queryset = Homework.objects.filter(school=parent.school, status=Homework.Status.PUBLISHED).select_related("school_class", "subject").prefetch_related("attachments")
+        if self.request.query_params.get("history", "false").lower() == "true":
+            enrollment_match = StudentEnrollment.objects.filter(
+                student=student,
+                school_class_id=OuterRef("school_class_id"),
+                enrolled_on__lte=OuterRef("date_assigned"),
+            ).filter(Q(left_on__isnull=True) | Q(left_on__gte=OuterRef("date_assigned")))
+            queryset = queryset.filter(Exists(enrollment_match))
+        else:
+            queryset = queryset.filter(school_class=student.school_class)
+        return queryset
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["parent"] = self.request.user.parent_profile
+        return context
 
 
 class PlatformSchoolViewSet(viewsets.ModelViewSet):

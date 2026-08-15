@@ -13,6 +13,7 @@ from .views import (
     CurrentUserView,
     LoginTokenObtainPairView,
     HealthView,
+    HomeworkViewSet,
     ReadinessView,
     FeeViewSet,
     ExpenseViewSet,
@@ -24,6 +25,7 @@ from .views import (
     N8NOutboxSentView,
     N8NWhatsAppStatusView,
     ParentAcademicResultViewSet,
+    ParentHomeworkViewSet,
     ParentCommunicationPreferenceView,
     ParentNotificationViewSet,
     ParentStudentTimetableView,
@@ -81,12 +83,14 @@ router.register("school/communication/history", CommunicationMessageViewSet, bas
 router.register("school/audit", AuditLogViewSet, basename="school-audit")
 router.register("school/parent-links", SchoolParentStudentViewSet, basename="school-parent-link")
 router.register("school/timetables", TimetableEntryViewSet, basename="school-timetable")
+router.register("school/homework", HomeworkViewSet, basename="school-homework")
 router.register("parent/students", ParentStudentViewSet, basename="parent-student")
 router.register("parent/payments", ParentPaymentViewSet, basename="parent-payment")
 router.register("parent/receipts", ParentReceiptViewSet, basename="parent-receipt")
 router.register("parent/results", ParentAcademicResultViewSet, basename="parent-result")
 router.register("parent/report-cards", ParentReportCardViewSet, basename="parent-report-card")
 router.register("parent/notifications", ParentNotificationViewSet, basename="parent-notification")
+router.register("parent/homework", ParentHomeworkViewSet, basename="parent-homework")
 
 urlpatterns = [
     path("health/", HealthView.as_view(), name="health"),

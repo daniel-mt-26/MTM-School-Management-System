@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from datetime import timedelta
 
+import dj_database_url
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -40,6 +41,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -53,7 +55,18 @@ ROOT_URLCONF = "config.urls"
 TEMPLATES = [{"BACKEND": "django.template.backends.django.DjangoTemplates", "DIRS": [], "APP_DIRS": True, "OPTIONS": {"context_processors": ["django.template.context_processors.request", "django.contrib.auth.context_processors.auth", "django.contrib.messages.context_processors.messages"]}}]
 WSGI_APPLICATION = "config.wsgi.application"
 
-DATABASES = {"default": {"ENGINE": "django.db.backends.postgresql", "NAME": os.getenv("POSTGRES_DB", "mtm_sms"), "USER": os.getenv("POSTGRES_USER", "postgres"), "PASSWORD": os.getenv("POSTGRES_PASSWORD", ""), "HOST": os.getenv("POSTGRES_HOST", "localhost"), "PORT": os.getenv("POSTGRES_PORT", "5432")}}
+DATABASE_URL = os.getenv("DATABASE_URL")
+if DATABASE_URL:
+    DATABASES = {
+        "default": dj_database_url.config(
+            default=DATABASE_URL,
+            conn_max_age=int(os.getenv("DB_CONN_MAX_AGE", "0")),
+            conn_health_checks=True,
+            ssl_require=env_bool("DB_SSL_REQUIRE", not DEBUG),
+        )
+    }
+else:
+    DATABASES = {"default": {"ENGINE": "django.db.backends.postgresql", "NAME": os.getenv("POSTGRES_DB", "mtm_sms"), "USER": os.getenv("POSTGRES_USER", "postgres"), "PASSWORD": os.getenv("POSTGRES_PASSWORD", ""), "HOST": os.getenv("POSTGRES_HOST", "localhost"), "PORT": os.getenv("POSTGRES_PORT", "5432")}}
 
 AUTH_USER_MODEL = "core.User"
 REST_FRAMEWORK = {
@@ -72,11 +85,27 @@ LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
-STATIC_URL = "static/"
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+HOMEWORK_RETENTION_TIME_ZONE = os.getenv("HOMEWORK_RETENTION_TIME_ZONE", "Africa/Johannesburg")
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-MAILERS = {"default": {"BACKEND": "django.core.mail.backends.console.EmailBackend"}}
+MAILER_BACKEND = os.getenv("DJANGO_EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+MAILERS = {"default": {"BACKEND": MAILER_BACKEND}}
+if MAILER_BACKEND == "django.core.mail.backends.smtp.EmailBackend":
+    MAILERS["default"]["OPTIONS"] = {
+        "host": os.getenv("EMAIL_HOST", ""),
+        "port": int(os.getenv("EMAIL_PORT", "587")),
+        "username": os.getenv("EMAIL_HOST_USER", ""),
+        "password": os.getenv("EMAIL_HOST_PASSWORD", ""),
+        "use_tls": env_bool("EMAIL_USE_TLS", True),
+    }
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", os.getenv("EMAIL_HOST_USER", "") or "webmaster@localhost")
 
 # n8n uses this server-to-server credential; it is never sent to React or
 # stored in the database. A blank value deliberately disables integration APIs.

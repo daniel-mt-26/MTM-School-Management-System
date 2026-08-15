@@ -1,9 +1,13 @@
 from copy import copy
+from io import BytesIO
+from pathlib import Path
+from zipfile import BadZipFile, ZipFile
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.contrib.auth.password_validation import validate_password
 from django.utils import timezone
 from rest_framework import serializers
+from PIL import Image, UnidentifiedImageError
 
 from .models import (
     AcademicResult,
@@ -15,6 +19,8 @@ from .models import (
     Expense,
     Fee,
     FinancialLedgerEntry,
+    Homework,
+    HomeworkAttachment,
     Notification,
     Parent,
     ParentCommunicationPreference,
@@ -34,6 +40,43 @@ from .models import (
     TimetableEntry,
     User,
 )
+
+HOMEWORK_MAX_ATTACHMENTS = 5
+HOMEWORK_MAX_FILE_SIZE = 10 * 1024 * 1024
+HOMEWORK_EXTENSIONS = {".pdf", ".docx", ".jpg", ".jpeg", ".png"}
+
+
+def validate_homework_file(upload):
+    extension = Path(upload.name).suffix.lower()
+    if extension not in HOMEWORK_EXTENSIONS:
+        raise serializers.ValidationError("Supported formats are PDF, DOCX, JPG, JPEG, and PNG.")
+    if upload.size > HOMEWORK_MAX_FILE_SIZE:
+        raise serializers.ValidationError("Each attachment must be 10 MB or smaller.")
+    data = upload.read()
+    upload.seek(0)
+    valid = False
+    content_type = ""
+    if extension == ".pdf":
+        valid, content_type = data.startswith(b"%PDF-"), "application/pdf"
+    elif extension == ".docx":
+        try:
+            with ZipFile(BytesIO(data)) as archive:
+                valid = "[Content_Types].xml" in archive.namelist() and "word/document.xml" in archive.namelist()
+        except BadZipFile:
+            valid = False
+        content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    else:
+        try:
+            with Image.open(BytesIO(data)) as image:
+                image.verify()
+                actual = image.format
+            valid = actual in {"JPEG", "PNG"} and ((extension in {".jpg", ".jpeg"} and actual == "JPEG") or (extension == ".png" and actual == "PNG"))
+            content_type = "image/jpeg" if actual == "JPEG" else "image/png"
+        except (UnidentifiedImageError, OSError):
+            valid = False
+    if not valid:
+        raise serializers.ValidationError("The attachment contents do not match a supported file format.")
+    return content_type
 
 
 class SchoolScopedSerializerMixin:
@@ -67,6 +110,103 @@ class SchoolScopedSerializerMixin:
                 raise serializers.ValidationError(exc.message_dict) from exc
             raise serializers.ValidationError(exc.messages) from exc
         return attrs
+
+
+class HomeworkAttachmentSerializer(serializers.ModelSerializer):
+    download_url = serializers.SerializerMethodField()
+
+    def get_download_url(self, attachment):
+        request = self.context.get("request")
+        route = "parent/homework" if self.context.get("parent") else "school/homework"
+        path = f"/api/{route}/{attachment.homework_id}/attachments/{attachment.id}/download/"
+        if self.context.get("parent") and request:
+            student = request.query_params.get("student")
+            if student:
+                path += f"?student={student}"
+        return request.build_absolute_uri(path) if request else path
+
+    class Meta:
+        model = HomeworkAttachment
+        fields = ["id", "original_name", "content_type", "size", "created_at", "download_url"]
+        read_only_fields = fields
+
+
+class HomeworkSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    scoped_related_fields = {"school_class": (SchoolClass, "school"), "subject": (Subject, "school")}
+    attachments = serializers.SerializerMethodField()
+    uploaded_attachments = serializers.ListField(child=serializers.FileField(), required=False, write_only=True)
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+    subject_name = serializers.CharField(source="subject.name", read_only=True, allow_null=True)
+    created_by_name = serializers.SerializerMethodField()
+
+    def get_created_by_name(self, homework):
+        return homework.created_by.get_full_name() or homework.created_by.username
+
+    def get_attachments(self, homework):
+        active = homework.attachments.filter(expires_at__gt=timezone.now())
+        return HomeworkAttachmentSerializer(active, many=True, context=self.context).data
+
+    def validate_uploaded_attachments(self, files):
+        existing = self.instance.attachments.filter(expires_at__gt=timezone.now()).count() if self.instance else 0
+        if existing + len(files) > HOMEWORK_MAX_ATTACHMENTS:
+            raise serializers.ValidationError(f"A homework item may have at most {HOMEWORK_MAX_ATTACHMENTS} attachments.")
+        for upload in files:
+            upload.validated_content_type = validate_homework_file(upload)
+        return files
+
+    def validate(self, attrs):
+        if "school" in self.initial_data or "school_id" in self.initial_data or "created_by" in self.initial_data:
+            raise serializers.ValidationError({"school": "School ownership and creator are controlled by the authenticated account."})
+        files = attrs.pop("uploaded_attachments", [])
+        candidate = copy(self.instance) if self.instance is not None else Homework()
+        for field_name, value in attrs.items():
+            setattr(candidate, field_name, value)
+        candidate.school = self.get_school()
+        candidate.created_by = self.instance.created_by if self.instance else self.context["request"].user
+        try:
+            candidate.clean()
+        except DjangoValidationError as exc:
+            if hasattr(exc, "message_dict"):
+                raise serializers.ValidationError(exc.message_dict) from exc
+            raise serializers.ValidationError(exc.messages) from exc
+        attrs["uploaded_attachments"] = files
+        return attrs
+
+    def _save_attachments(self, homework, files):
+        for upload in files:
+            HomeworkAttachment.objects.create(homework=homework, file=upload, original_name=Path(upload.name).name[:255], content_type=upload.validated_content_type, size=upload.size)
+
+    def create(self, validated_data):
+        files = validated_data.pop("uploaded_attachments", [])
+        homework = Homework.objects.create(**validated_data)
+        self._save_attachments(homework, files)
+        return homework
+
+    def update(self, instance, validated_data):
+        files = validated_data.pop("uploaded_attachments", [])
+        instance = super().update(instance, validated_data)
+        self._save_attachments(instance, files)
+        return instance
+
+    class Meta:
+        model = Homework
+        fields = ["id", "title", "instructions", "school_class", "class_name", "subject", "subject_name", "date_assigned", "due_date", "status", "created_by_name", "created_at", "updated_at", "attachments", "uploaded_attachments"]
+        read_only_fields = ["id", "class_name", "subject_name", "created_by_name", "created_at", "updated_at", "attachments"]
+
+
+class ParentHomeworkSerializer(serializers.ModelSerializer):
+    attachments = serializers.SerializerMethodField()
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+    subject_name = serializers.CharField(source="subject.name", read_only=True, allow_null=True)
+
+    def get_attachments(self, homework):
+        active = homework.attachments.filter(expires_at__gt=timezone.now())
+        return HomeworkAttachmentSerializer(active, many=True, context=self.context).data
+
+    class Meta:
+        model = Homework
+        fields = ["id", "title", "instructions", "class_name", "subject_name", "date_assigned", "due_date", "attachments"]
+        read_only_fields = fields
 
 
 class SchoolSerializer(serializers.ModelSerializer):
