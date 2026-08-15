@@ -1,1 +1,10 @@
--r backend/requirements.txt
+Django==6.1
+django-cors-headers==4.9.0
+djangorestframework==3.18.0
+djangorestframework-simplejwt==5.5.1
+psycopg[binary]>=3.2,<4
+Pillow>=11.0,<13
+python-dotenv==1.2.2
+dj-database-url==2.2.0
+whitenoise==6.7.0
+django-storages[s3]>=1.14.6,<2

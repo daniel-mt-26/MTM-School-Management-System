@@ -1774,7 +1774,11 @@ During local development, Django may serve media while:
 DEBUG=True
 ```
 
-Production should use an appropriate media and static file strategy.
+Local uploads use `backend/media/` through Django `FileSystemStorage`.
+Production sets `MTM_MEDIA_STORAGE=supabase` to use a private Supabase Storage
+bucket through Django's S3 storage backend. WhiteNoise remains responsible only
+for collected static assets. Supabase S3 credentials are server-side backend
+environment variables and are never sent to React.
 
 Protected files must remain protected even when using external storage.
 
@@ -1784,6 +1788,11 @@ This is particularly important for:
 * Receipts
 * School documents
 * Other private records
+
+Homework and Report Card downloads continue through authenticated Django
+endpoints. Expired Homework objects are removed through
+`python manage.py purge_expired_homework_attachments`, which deletes using the
+configured Django storage backend.
 
 ---
 

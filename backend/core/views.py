@@ -217,6 +217,8 @@ class SchoolProfileView(APIView):
 
     def patch(self, request):
         school = request.user.school_administrator.school
+        previous_logo_name = school.logo.name if school.logo else ""
+        logo_storage = school.logo.storage
         serializer = SchoolProfileSerializer(
             school,
             data=request.data,
@@ -225,6 +227,8 @@ class SchoolProfileView(APIView):
         )
         serializer.is_valid(raise_exception=True)
         school = serializer.save()
+        if previous_logo_name and school.logo.name != previous_logo_name:
+            logo_storage.delete(previous_logo_name)
         log_action(school=school, actor=request.user, action="school_profile_updated", resource=school, description="School profile settings updated")
         return Response(serializer.data)
 

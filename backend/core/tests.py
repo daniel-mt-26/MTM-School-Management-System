@@ -7,8 +7,9 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
-from django.test import override_settings
+from django.test import SimpleTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -46,6 +47,52 @@ from .models import (
     User,
 )
 from PIL import Image
+from config.storage import media_storage_config
+
+
+class MediaStorageConfigurationTests(SimpleTestCase):
+    def test_local_mode_uses_file_system_and_static_stays_on_whitenoise(self):
+        self.assertEqual(media_storage_config({}), {"BACKEND": "django.core.files.storage.FileSystemStorage"})
+        from django.conf import settings
+        self.assertEqual(settings.STORAGES["staticfiles"]["BACKEND"], "whitenoise.storage.CompressedManifestStaticFilesStorage")
+
+    def test_supabase_mode_builds_private_path_style_signed_s3_storage(self):
+        environment = {
+            "MTM_MEDIA_STORAGE": "supabase",
+            "SUPABASE_STORAGE_BUCKET": "private-test-bucket",
+            "SUPABASE_S3_ENDPOINT": "https://project-ref.storage.supabase.co/storage/v1/s3",
+            "SUPABASE_S3_REGION": "test-region",
+            "SUPABASE_S3_ACCESS_KEY_ID": "test-access-key",
+            "SUPABASE_S3_SECRET_ACCESS_KEY": "test-secret-key",
+        }
+        config = media_storage_config(environment)
+        self.assertEqual(config["BACKEND"], "storages.backends.s3.S3Storage")
+        self.assertEqual(config["OPTIONS"]["addressing_style"], "path")
+        self.assertEqual(config["OPTIONS"]["signature_version"], "s3v4")
+        self.assertTrue(config["OPTIONS"]["querystring_auth"])
+        self.assertEqual(config["OPTIONS"]["querystring_expire"], 300)
+        self.assertFalse(config["OPTIONS"]["file_overwrite"])
+        self.assertIsNone(config["OPTIONS"]["default_acl"])
+        self.assertTrue(config["OPTIONS"]["verify"])
+
+    def test_supabase_mode_fails_safely_when_configuration_is_missing(self):
+        with self.assertRaisesMessage(ImproperlyConfigured, "SUPABASE_S3_SECRET_ACCESS_KEY") as caught:
+            media_storage_config({
+                "MTM_MEDIA_STORAGE": "supabase",
+                "SUPABASE_STORAGE_BUCKET": "bucket",
+                "SUPABASE_S3_ENDPOINT": "https://example.test/storage/v1/s3",
+                "SUPABASE_S3_REGION": "region",
+                "SUPABASE_S3_ACCESS_KEY_ID": "access",
+            })
+        self.assertNotIn("secret-value", str(caught.exception))
+
+    def test_supabase_endpoint_must_use_https(self):
+        environment = {name: "value" for name in (
+            "SUPABASE_STORAGE_BUCKET", "SUPABASE_S3_REGION", "SUPABASE_S3_ACCESS_KEY_ID", "SUPABASE_S3_SECRET_ACCESS_KEY"
+        )}
+        environment.update({"MTM_MEDIA_STORAGE": "supabase", "SUPABASE_S3_ENDPOINT": "http://example.test/storage/v1/s3"})
+        with self.assertRaisesMessage(ImproperlyConfigured, "must use HTTPS"):
+            media_storage_config(environment)
 
 
 class TenantIsolationTests(APITestCase):
@@ -852,6 +899,25 @@ class TenantIsolationTests(APITestCase):
         self.assertEqual(response.data["role"], User.Role.SCHOOL_ADMIN)
 
 
+    def test_report_card_files_use_only_protected_tenant_scoped_downloads(self):
+        self.report_a.file.save("private-a.pdf", SimpleUploadedFile("private-a.pdf", b"%PDF-1.4\nA\n%%EOF"), save=True)
+        self.addCleanup(self.report_a.file.storage.delete, self.report_a.file.name)
+        self.authenticate(self.admin_a)
+        detail = self.client.get(f"/api/school/report-cards/{self.report_a.id}/")
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
+        self.assertNotIn("file", detail.data)
+        self.assertEqual(detail.data["download_url"], f"/school/report-cards/{self.report_a.id}/download/")
+        self.assertNotIn(self.report_a.file.name, str(detail.data))
+        cross_school = self.client.get(f"/api/school/report-cards/{self.report_b.id}/download/")
+        self.assertEqual(cross_school.status_code, status.HTTP_404_NOT_FOUND, cross_school.data)
+        self.authenticate(self.parent_b_user)
+        self.assertEqual(self.client.get(f"/api/parent/report-cards/{self.report_a.id}/download/").status_code, status.HTTP_404_NOT_FOUND)
+        self.authenticate(self.parent_a_user)
+        parent_detail = self.client.get(f"/api/parent/report-cards/{self.report_a.id}/")
+        self.assertNotIn("file", parent_detail.data)
+        self.assertEqual(parent_detail.data["download_url"], f"/parent/report-cards/{self.report_a.id}/download/")
+
+
 class FinanceExpansionTests(APITestCase):
     setUp = TenantIsolationTests.setUp
     make_user = TenantIsolationTests.make_user
@@ -1251,6 +1317,8 @@ class HomeworkTests(APITestCase):
         self.assertTrue(attachment.file.storage.exists(stored_name))
         self.assertEqual(self.client.get(f"/api/school/homework/{homework_id}/").data["attachments"], [])
         self.assertEqual(self.client.get(f"/api/school/homework/{homework_id}/attachments/{attachment.id}/download/").status_code, status.HTTP_404_NOT_FOUND)
-        call_command("purge_expired_homework_attachments")
+        with patch.object(attachment.file.storage, "delete", wraps=attachment.file.storage.delete) as storage_delete:
+            call_command("purge_expired_homework_attachments")
+            storage_delete.assert_called_once_with(stored_name)
         self.assertFalse(HomeworkAttachment.objects.filter(pk=attachment.pk).exists())
         self.assertFalse(attachment.file.storage.exists(stored_name))

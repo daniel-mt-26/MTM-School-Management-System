@@ -805,14 +805,19 @@ class ReportCardSerializer(SchoolScopedSerializerMixin, serializers.ModelSeriali
     class_name = serializers.CharField(source="student_enrollment.school_class.name", read_only=True)
     academic_year_name = serializers.CharField(source="student_enrollment.academic_year.name", read_only=True)
     term_name = serializers.CharField(source="term.name", read_only=True)
+    file = serializers.FileField(write_only=True, required=False)
+    download_url = serializers.SerializerMethodField()
 
     def get_student_name(self, report_card):
         student = report_card.student_enrollment.student
         return f"{student.first_name} {student.last_name}".strip()
 
+    def get_download_url(self, report_card):
+        return f"/school/report-cards/{report_card.id}/download/" if report_card.file else None
+
     class Meta:
         model = ReportCard
-        fields = ["id", "student_enrollment", "student_name", "admission_number", "class_name", "academic_year_name", "term", "term_name", "generated_at", "file"]
+        fields = ["id", "student_enrollment", "student_name", "admission_number", "class_name", "academic_year_name", "term", "term_name", "generated_at", "file", "download_url"]
         read_only_fields = ["id", "generated_at"]
 
 
@@ -1017,9 +1022,14 @@ class ParentResultSerializer(serializers.ModelSerializer):
 
 
 class ParentReportCardSerializer(serializers.ModelSerializer):
+    download_url = serializers.SerializerMethodField()
+
+    def get_download_url(self, report_card):
+        return f"/parent/report-cards/{report_card.id}/download/" if report_card.file else None
+
     class Meta:
         model = ReportCard
-        fields = ["id", "student_enrollment", "term", "generated_at", "file"]
+        fields = ["id", "student_enrollment", "term", "generated_at", "download_url"]
         read_only_fields = fields
 
 

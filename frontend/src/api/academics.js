@@ -1,4 +1,4 @@
-import { apiClient } from './client'
+import { apiClient, apiDownload } from './client'
 
 function queryString(params = {}) {
   const query = new URLSearchParams()
@@ -9,3 +9,4 @@ function queryString(params = {}) {
 export const getAcademicRecords = (resource, params = {}) => apiClient(`/school/${resource}/${queryString(params)}`)
 export const saveAcademicRecord = (resource, data, id) => apiClient(`/school/${resource}/${id ? `${id}/` : ''}`, { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
 export const removeAcademicRecord = (resource, id) => apiClient(`/school/${resource}/${id}/`, { method: 'DELETE' })
+export const downloadReportCard = (id) => apiDownload(`/school/report-cards/${id}/download/`, `report-card-${id}`)

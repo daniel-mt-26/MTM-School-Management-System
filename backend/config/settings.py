@@ -7,6 +7,8 @@ from datetime import timedelta
 import dj_database_url
 from dotenv import load_dotenv
 
+from .storage import media_storage_config
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
@@ -88,7 +90,7 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STORAGES = {
-    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "default": media_storage_config(os.environ),
     "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
 }
 MEDIA_URL = "/media/"
