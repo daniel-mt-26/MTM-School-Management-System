@@ -14,9 +14,12 @@ export default function DashboardLayout({ title, description }) {
   return (
     <main className="dashboard-page">
       <header className="dashboard-header">
-        <div>
-          <p className="brand">MTM School Management System</p>
-          <h1>{title}</h1>
+        <div className="platform-identity">
+          <img className="platform-logo platform-header-logo" src="/mds-logo.png" alt="MDS" />
+          <div>
+            <p className="brand">MTM School Management System</p>
+            <h1>{title}</h1>
+          </div>
         </div>
         <button type="button" className="secondary-button" onClick={handleLogout}>Log out</button>
       </header>

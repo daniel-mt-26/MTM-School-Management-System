@@ -37,6 +37,7 @@ export default function LoginPage() {
   return (
     <main className="login-page">
       <section className="login-card" aria-labelledby="login-title">
+        <img className="platform-logo login-logo" src="/mds-logo.png" alt="MDS" />
         <p className="brand">MTM School Management System</p>
         <h1 id="login-title">Sign in</h1>
         <p className="login-copy">Use your MTM account to continue.</p>
