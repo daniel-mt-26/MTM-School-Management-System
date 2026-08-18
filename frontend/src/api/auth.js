@@ -15,7 +15,14 @@ export const tokenStorage = {
 }
 
 async function request(path, options = {}) {
-  const response = await fetch(`${API_BASE_URL}${path}`, options)
+  let response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, options)
+  } catch {
+    const error = new Error('Network error')
+    error.code = 'network_error'
+    throw error
+  }
   const data = response.status === 204 ? null : await response.json().catch(() => null)
 
   if (!response.ok) {
@@ -33,6 +40,9 @@ export function login(username, password) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
+  }).catch((error) => {
+    if (error.status === 401) error.code = 'invalid_credentials'
+    throw error
   })
 }
 

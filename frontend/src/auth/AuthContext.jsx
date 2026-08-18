@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { login, tokenStorage } from '../api/auth'
+import { getCurrentUser, login, tokenStorage } from '../api/auth'
 import { apiClient, setAuthenticationFailureHandler } from '../api/client'
 import { AuthContext } from './context'
 
@@ -39,14 +39,21 @@ export function AuthProvider({ children }) {
 
   const signIn = useCallback(async (username, password) => {
     const tokens = await login(username, password)
-    tokenStorage.setTokens(tokens)
+    const { access, refresh } = tokens ?? {}
+    if (typeof access !== 'string' || typeof refresh !== 'string') {
+      const error = new Error('Invalid token response')
+      error.code = 'post_login_error'
+      throw error
+    }
+    tokenStorage.setTokens({ access, refresh })
     try {
-      const profile = await apiClient('/auth/me/')
+      const profile = await getCurrentUser(access)
       setUser(profile)
       setSessionMessage('')
       return profile
     } catch (error) {
       tokenStorage.clear()
+      error.code = error.code === 'network_error' ? 'network_error' : 'post_login_error'
       throw error
     }
   }, [])

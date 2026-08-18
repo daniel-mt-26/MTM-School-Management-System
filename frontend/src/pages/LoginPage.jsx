@@ -26,9 +26,13 @@ export default function LoginPage() {
         : routeForRole(profile.role)
       navigate(destination, { replace: true })
     } catch (requestError) {
-      setError(requestError.status === 401
-        ? 'Your username or password is incorrect.'
-        : 'We could not reach the MTM server. Please try again.')
+      if (requestError.code === 'invalid_credentials') {
+        setError('Your username or password is incorrect.')
+      } else if (requestError.code === 'network_error') {
+        setError('We could not reach the MTM server. Please try again.')
+      } else {
+        setError('You signed in, but the application could not load your account. Please try again.')
+      }
     } finally {
       setIsSubmitting(false)
     }
