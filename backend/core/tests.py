@@ -94,6 +94,20 @@ class MediaStorageConfigurationTests(SimpleTestCase):
         with self.assertRaisesMessage(ImproperlyConfigured, "must use HTTPS"):
             media_storage_config(environment)
 
+    def test_unexpected_api_error_logs_location_without_secret_message(self):
+        from .exceptions import api_exception_handler
+
+        try:
+            raise RuntimeError("password=secret-value")
+        except RuntimeError as exc:
+            with self.assertLogs("core.exceptions", level="ERROR") as captured:
+                response = api_exception_handler(exc, {"view": None})
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data, {"detail": "Unable to complete this request. Please try again."})
+        self.assertIn("RuntimeError", captured.output[0])
+        self.assertIn("location=", captured.output[0])
+        self.assertNotIn("secret-value", captured.output[0])
+
 
 class TenantIsolationTests(APITestCase):
     """Two-school tests: every private endpoint must scope objects server-side."""
@@ -897,6 +911,12 @@ class TenantIsolationTests(APITestCase):
         response = self.client.get("/api/auth/me/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["role"], User.Role.SCHOOL_ADMIN)
+
+    def test_jwt_login_rejects_invalid_password(self):
+        response = self.client.post("/api/auth/token/", {"username": "admin-a", "password": "incorrect-password"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertNotIn("access", response.data)
+        self.assertNotIn("refresh", response.data)
 
 
     def test_report_card_files_use_only_protected_tenant_scoped_downloads(self):
