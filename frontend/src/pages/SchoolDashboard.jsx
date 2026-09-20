@@ -169,6 +169,11 @@ function SchoolDashboard() {
             <p>Fees, payments, receipts and ledgers.</p>
           </Link>
 
+          <Link to="/school/inventory" className="dashboard-card">
+            <h2>Inventory</h2>
+            <p>Track supplies, stock levels and movements.</p>
+          </Link>
+
           <Link to="/school/communication" className="dashboard-card">
             <h2>Communication</h2>
             <p>Notifications and school communication.</p>

@@ -35,6 +35,16 @@ Vercel environment. If it is absent locally, Django continues to use the
 existing `POSTGRES_*` settings. Set production host/origin values through
 `DJANGO_ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, and `CSRF_TRUSTED_ORIGINS`.
 
+For Vercel's short-lived functions, select **Transaction pooler** in the
+Supabase project's Connect dialog and copy its full connection string. The
+shared transaction pooler uses port `6543` and a pooler-specific username;
+changing only the port of a direct URL is insufficient. Percent-encode
+reserved characters in the password. Keep `DB_CONN_MAX_AGE=0` (the default)
+and `DB_SSL_REQUIRE=true` in production. Django 6.1 disables psycopg prepared
+statements by default. A successful `/api/health/ready/` response confirms
+only that one invocation could open a connection at that moment; it does not
+guarantee later invocations will connect.
+
 WhiteNoise serves collected Django static assets only. Vercel's filesystem is
 not persistent uploaded-media storage. MTM now selects its Django default media
 storage explicitly:

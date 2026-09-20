@@ -1,6 +1,6 @@
 export const roleRoutes = {
   platform_admin: '/platform',
-  school_admin: '/school',
+  school_admin: '/app',
   parent: '/parent',
 }
 

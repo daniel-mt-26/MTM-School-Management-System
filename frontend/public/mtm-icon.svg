@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#2457a5"/>
+  <path fill="#ffffff" d="M96 140h320v232H96z" opacity=".14"/>
+  <path fill="#ffffff" d="M114 170l142-72 142 72-142 72-142-72zm52 43v120h52v-85l38 19 38-19v85h52V213l-90 45-90-45z"/>
+  <text x="256" y="426" text-anchor="middle" font-family="Arial,sans-serif" font-size="58" font-weight="700" fill="#ffffff">MTM</text>
+</svg>

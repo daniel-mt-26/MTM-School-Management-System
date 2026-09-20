@@ -353,6 +353,33 @@ button:disabled { cursor: wait; opacity: 0.7; }
 .finance-summary div { display: grid; gap: 8px; padding: 22px; border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; }
 .finance-summary span { color: #6b7280; font-size: 13px; }
 .finance-summary strong { font-size: 22px; }
+.inventory-summary { margin-bottom: 18px; }
+.inventory-form { max-width: 760px; }
+.inventory-form-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.inventory-form-heading h2 { margin-bottom: 20px; }
+.inventory-inner-form { width: 100%; margin: 0; padding: 0; border: 0; box-shadow: none; }
+.inventory-filters { grid-template-columns: minmax(220px, 1fr) 220px 180px; }
+.inventory-low_stock { background: #fff7ed; color: #9a3412; }
+.inventory-out_of_stock { background: #fef2f2; color: #b91c1c; }
+.inventory-in_stock { background: #ecfdf3; color: #166534; }
+.inventory-in { color: #166534; font-weight: 700; }
+.inventory-out { color: #b91c1c; font-weight: 700; }
+.inventory-cache-notice, .inventory-sync-issues { box-sizing: border-box; width: min(100%, 1100px); margin: 0 auto 18px; padding: 13px 14px; border-radius: 8px; }
+.inventory-cache-notice { border: 1px solid #fed7aa; background: #fff7ed; color: #9a3412; }
+.inventory-sync-issues { border: 1px solid #fecaca; background: #fff7f7; color: #7f1d1d; }
+.inventory-sync-issues h2 { margin: 0 0 10px; font-size: 17px; }
+.inventory-sync-issues > div { padding: 10px 0; border-top: 1px solid #fecaca; }
+.inventory-sync-issues p { margin: 5px 0 10px; }
+.inventory-sync-tag { display: inline-block; margin: 0 0 0 7px; padding: 2px 6px; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 11px; font-weight: 700; vertical-align: middle; }
+.inventory-sync-tag.failed { background: #fee2e2; color: #b91c1c; }
+.inventory-sync-tag.syncing { background: #dbeafe; color: #1d4ed8; }
+.table-subtext { display: block; margin-top: 3px; color: #6b7280; font-size: 12px; }
+.sync-status, .pwa-update-notice { position: fixed; z-index: 100; right: 18px; bottom: 18px; display: flex; align-items: center; gap: 10px; max-width: min(440px, calc(100vw - 36px)); padding: 10px 12px; border: 1px solid #bfdbfe; border-radius: 9px; background: #eff6ff; box-shadow: 0 8px 24px rgb(15 23 42 / 16%); color: #1e3a5f; font-size: 13px; }
+.sync-status { flex-wrap: wrap; }
+.sync-status.offline { border-color: #fed7aa; background: #fff7ed; color: #9a3412; }
+.sync-status small { color: inherit; opacity: 0.82; }
+.sync-status button, .pwa-update-notice button { min-height: 32px; margin: 0; padding: 6px 10px; font-size: 12px; }
+.pwa-update-notice { bottom: 76px; }
 .communication-nav { display: flex; flex-wrap: wrap; gap: 8px; width: min(100%, 1100px); margin: 0 auto 18px; }
 .communication-nav a { padding: 9px 12px; border: 1px solid #dbe3ef; border-radius: 7px; color: #2457a5; text-decoration: none; font-weight: 600; background: #fff; }
 .communication-nav a.active { background: #2457a5; border-color: #2457a5; color: #fff; }
@@ -390,7 +417,7 @@ button:disabled { cursor: wait; opacity: 0.7; }
   .student-page-header { flex-direction: column; align-items: stretch; gap: 12px; margin-bottom: 18px; }
   .student-page-header .primary-link { align-self: flex-start; }
   .student-page-header h1 { font-size: 25px; overflow-wrap: anywhere; }
-  .student-filters, .academic-filters { gap: 10px; margin-bottom: 14px; }
+  .student-filters, .academic-filters, .inventory-filters { gap: 10px; margin-bottom: 14px; }
   .student-form, .profile-section, .school-settings-form, .school-section-content { padding: 20px 16px; border-radius: 10px; }
   .student-state { padding: 28px 18px; }
   .settings-logo-row { align-items: flex-start; flex-direction: column; gap: 12px; }
@@ -447,6 +474,6 @@ button:disabled { cursor: wait; opacity: 0.7; }
 
   .student-page { padding: 24px 16px; }
   .student-page-header { align-items: flex-start; }
-  .student-filters, .form-columns, .detail-grid, .parent-link-form, .academic-filters { grid-template-columns: 1fr; }
+  .student-filters, .form-columns, .detail-grid, .parent-link-form, .academic-filters, .inventory-filters { grid-template-columns: 1fr; }
   .finance-summary { grid-template-columns: 1fr; }
 }

@@ -42,6 +42,15 @@ export async function apiClient(path, options = {}, retried = false) {
     throw error
   }
 
+  const data = response.status === 204 ? null : await response.json().catch(() => null)
+  const blockedCode = data?.code
+  if (['school_suspended', 'school_archived'].includes(blockedCode)) {
+    onAuthenticationFailure({ code: blockedCode })
+    const error = new Error('School access blocked')
+    error.status = response.status; error.data = data; error.code = blockedCode
+    throw error
+  }
+
   if (response.status === 401 && !retried && !path.startsWith('/auth/token/')) {
     try {
       await refreshOnce()
@@ -55,7 +64,6 @@ export async function apiClient(path, options = {}, retried = false) {
     }
   }
 
-  const data = response.status === 204 ? null : await response.json().catch(() => null)
   if (!response.ok) {
     const error = new Error('Request failed')
     error.status = response.status

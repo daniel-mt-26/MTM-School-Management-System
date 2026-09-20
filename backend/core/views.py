@@ -6,7 +6,8 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.db import connection
-from django.db.models import Exists, OuterRef, Prefetch, Q
+from django.db.models import Case, Exists, F, IntegerField, OuterRef, Prefetch, Q, Sum, Value, When
+from django.db.models.functions import Coalesce
 from django.http import FileResponse, Http404
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -20,10 +21,11 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from .models import (
     AcademicResult,
+    AttendanceRecord,
     AcademicYear,
     AuditLog,
     Announcement,
@@ -34,6 +36,10 @@ from .models import (
     FinancialLedgerEntry,
     Homework,
     HomeworkAttachment,
+    InventoryCategory,
+    InventoryItem,
+    InventoryStockMovement,
+    InventoryVariant,
     Notification,
     Parent,
     ParentCommunicationPreference,
@@ -43,6 +49,7 @@ from .models import (
     RecurringFeeTemplate,
     ReportCard,
     School,
+    SchoolAdministrator,
     SchoolCommunicationSettings,
     SchoolClass,
     Student,
@@ -51,7 +58,9 @@ from .models import (
     Subject,
     Term,
     TimetableEntry,
+    User,
 )
+from .authentication import MTMTokenObtainPairSerializer, MTMTokenRefreshSerializer
 from .finance import assign_fee, assignment_totals, generate_recurring_charges, record_payment, reverse_payment, student_totals
 from .communications import (
     announcement_recipients,
@@ -63,9 +72,11 @@ from .communications import (
     transition_message,
 )
 from .audit import log_action
+from .idempotency import IdempotentCreateMixin
 from .permissions import IsParent, IsPlatformAdministrator, IsSchoolAdministrator
 from .serializers import (
     AcademicResultSerializer,
+    AttendanceBulkSerializer,
     AcademicYearSerializer,
     AuditLogSerializer,
     AnnouncementSerializer,
@@ -75,6 +86,10 @@ from .serializers import (
     CurrentUserSerializer,
     FeeSerializer,
     ExpenseSerializer,
+    InventoryCategorySerializer,
+    InventoryItemSerializer,
+    InventoryStockMovementSerializer,
+    InventoryVariantSerializer,
     FinancialLedgerEntrySerializer,
     HomeworkSerializer,
     NotificationSerializer,
@@ -98,6 +113,11 @@ from .serializers import (
     SchoolParentStudentSerializer,
     SchoolProfileSerializer,
     SchoolSerializer,
+    PlatformSchoolSerializer,
+    PlatformSchoolProvisionSerializer,
+    PlatformAdministratorSerializer,
+    PlatformAdministratorProvisionSerializer,
+    PasswordChangeSerializer,
     StudentEnrollmentSerializer,
     StudentFeeAssignmentSerializer,
     StudentDetailSerializer,
@@ -109,6 +129,7 @@ from .serializers import (
     TimetableEntrySerializer,
 )
 from .tenant import ParentScopedQuerysetMixin, SchoolScopedQuerysetMixin
+from .platform_services import create_school_administrator, provision_school, reset_administrator_password
 
 
 class SchoolAdminViewSet(SchoolScopedQuerysetMixin, viewsets.ModelViewSet):
@@ -118,6 +139,11 @@ class SchoolAdminViewSet(SchoolScopedQuerysetMixin, viewsets.ModelViewSet):
 class LoginTokenObtainPairView(TokenObtainPairView):
     throttle_scope = "login"
     throttle_classes = [ScopedRateThrottle]
+    serializer_class = MTMTokenObtainPairSerializer
+
+
+class MTMTokenRefreshView(TokenRefreshView):
+    serializer_class = MTMTokenRefreshSerializer
 
 
 def receipt_pdf_response(receipt):
@@ -888,6 +914,281 @@ class ExpenseViewSet(SchoolAdminViewSet):
         raise MethodNotAllowed("DELETE")
 
 
+def with_current_stock(queryset, movement_lookup="stock_movements"):
+    """Annotate stock without trusting any client-supplied quantity."""
+    return queryset.annotate(
+        current_stock=Coalesce(
+            Sum(
+                Case(
+                    When(**{f"{movement_lookup}__direction": InventoryStockMovement.Direction.IN}, then=F(f"{movement_lookup}__quantity")),
+                    default=-F(f"{movement_lookup}__quantity"),
+                    output_field=IntegerField(),
+                )
+            ),
+            Value(0),
+            output_field=IntegerField(),
+        )
+    )
+
+
+class InventoryCategoryViewSet(IdempotentCreateMixin, SchoolAdminViewSet):
+    queryset = InventoryCategory.objects.all()
+    serializer_class = InventoryCategorySerializer
+    school_lookup = "school"
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.request.query_params.get("active") in {"true", "false"}:
+            queryset = queryset.filter(is_active=self.request.query_params["active"] == "true")
+        if query := self.request.query_params.get("q", "").strip():
+            queryset = queryset.filter(Q(name__icontains=query) | Q(description__icontains=query))
+        return queryset
+
+    def perform_create(self, serializer):
+        category = serializer.save(school=self.get_school())
+        log_action(school=category.school, actor=self.request.user, action="inventory_category_created", resource=category, description=f"Inventory category created: {category.name}")
+
+    def perform_update(self, serializer):
+        category = serializer.save()
+        log_action(school=category.school, actor=self.request.user, action="inventory_category_updated", resource=category, description=f"Inventory category updated: {category.name}")
+
+    def destroy(self, request, *args, **kwargs):
+        raise MethodNotAllowed("DELETE")
+
+
+class InventoryItemViewSet(IdempotentCreateMixin, SchoolAdminViewSet):
+    queryset = InventoryItem.objects.all()
+    serializer_class = InventoryItemSerializer
+    school_lookup = "school"
+
+    def get_queryset(self):
+        variants = with_current_stock(InventoryVariant.objects.all()).order_by("name", "id")
+        queryset = with_current_stock(super().get_queryset().select_related("category")).prefetch_related(Prefetch("variants", queryset=variants))
+        if category := self.request.query_params.get("category"):
+            queryset = queryset.filter(category_id=category)
+        if self.request.query_params.get("active") in {"true", "false"}:
+            queryset = queryset.filter(is_active=self.request.query_params["active"] == "true")
+        if query := self.request.query_params.get("q", "").strip():
+            queryset = queryset.filter(Q(name__icontains=query) | Q(code__icontains=query) | Q(description__icontains=query) | Q(storage_location__icontains=query))
+        if self.request.query_params.get("low_stock") == "true":
+            queryset = queryset.filter(current_stock__gt=0, current_stock__lte=F("minimum_stock_level"))
+        if self.request.query_params.get("out_of_stock") == "true":
+            queryset = queryset.filter(current_stock__lte=0)
+        return queryset.order_by("name", "id")
+
+    def perform_create(self, serializer):
+        item = serializer.save(school=self.get_school())
+        log_action(school=item.school, actor=self.request.user, action="inventory_item_created", resource=item, description=f"Inventory item created: {item.name}")
+
+    def perform_update(self, serializer):
+        item = serializer.save()
+        log_action(school=item.school, actor=self.request.user, action="inventory_item_updated", resource=item, description=f"Inventory item updated: {item.name}")
+
+    def destroy(self, request, *args, **kwargs):
+        raise MethodNotAllowed("DELETE")
+
+
+class InventoryVariantViewSet(IdempotentCreateMixin, SchoolAdminViewSet):
+    queryset = InventoryVariant.objects.all()
+    serializer_class = InventoryVariantSerializer
+    school_lookup = "item__school"
+
+    def get_queryset(self):
+        queryset = with_current_stock(super().get_queryset().select_related("item"))
+        if item := self.request.query_params.get("item"):
+            queryset = queryset.filter(item_id=item)
+        if self.request.query_params.get("active") in {"true", "false"}:
+            queryset = queryset.filter(is_active=self.request.query_params["active"] == "true")
+        return queryset.order_by("item__name", "name", "id")
+
+    def perform_create(self, serializer):
+        variant = serializer.save()
+        log_action(school=variant.item.school, actor=self.request.user, action="inventory_variant_created", resource=variant, description=f"Inventory variant created: {variant.item.name} — {variant.name}")
+
+    def perform_update(self, serializer):
+        variant = serializer.save()
+        log_action(school=variant.item.school, actor=self.request.user, action="inventory_variant_updated", resource=variant, description=f"Inventory variant updated: {variant.item.name} — {variant.name}")
+
+    def destroy(self, request, *args, **kwargs):
+        raise MethodNotAllowed("DELETE")
+
+
+class InventoryStockMovementViewSet(IdempotentCreateMixin, SchoolAdminViewSet):
+    queryset = InventoryStockMovement.objects.all()
+    serializer_class = InventoryStockMovementSerializer
+    school_lookup = "school"
+
+    def get_queryset(self):
+        queryset = super().get_queryset().select_related("item", "variant", "created_by")
+        if item := self.request.query_params.get("item"):
+            queryset = queryset.filter(item_id=item)
+        if variant := self.request.query_params.get("variant"):
+            queryset = queryset.filter(variant_id=variant)
+        if movement_type := self.request.query_params.get("movement_type"):
+            queryset = queryset.filter(movement_type=movement_type)
+        return queryset
+
+    @transaction.atomic
+    def create_once(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        item = InventoryItem.objects.select_for_update().get(pk=serializer.validated_data["item"].pk, school=self.get_school())
+        variant = serializer.validated_data.get("variant")
+        if variant:
+            variant = InventoryVariant.objects.select_for_update().get(pk=variant.pk, item=item)
+        locked_data = {**serializer.validated_data, "item": item, "variant": variant}
+        serializer.validate_stock_rules(serializer.movement_candidate(locked_data))
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def perform_create(self, serializer):
+        movement = serializer.save(school=self.get_school(), created_by=self.request.user)
+        log_action(school=movement.school, actor=self.request.user, action="inventory_stock_movement_recorded", resource=movement, description=f"{movement.get_movement_type_display()}: {movement.item.name} ({movement.quantity})")
+
+    def update(self, request, *args, **kwargs):
+        raise MethodNotAllowed(request.method)
+
+    def destroy(self, request, *args, **kwargs):
+        raise MethodNotAllowed("DELETE")
+
+
+class InventorySummaryView(APIView):
+    permission_classes = [IsSchoolAdministrator]
+
+    def get(self, request):
+        school = request.user.school_administrator.school
+        items = list(with_current_stock(InventoryItem.objects.filter(school=school, is_active=True).select_related("category")).order_by("name", "id"))
+        low_stock = [item for item in items if 0 < item.current_stock <= item.minimum_stock_level]
+        out_of_stock = [item for item in items if item.current_stock <= 0]
+        recent = InventoryStockMovement.objects.filter(school=school).select_related("item", "variant", "created_by").order_by("-created_at", "-id")[:10]
+        return Response({
+            "total_active_items": len(items),
+            "low_stock_items": InventoryItemSerializer(low_stock, many=True, context={"school": school, "request": request}).data,
+            "out_of_stock_items": InventoryItemSerializer(out_of_stock, many=True, context={"school": school, "request": request}).data,
+            "recent_stock_movements": InventoryStockMovementSerializer(recent, many=True, context={"school": school, "request": request}).data,
+        })
+
+
+def attendance_context(*, school, school_class_id, academic_year_id, term_id, attendance_date):
+    school_class = get_object_or_404(SchoolClass, pk=school_class_id, school=school, is_active=True)
+    academic_year = get_object_or_404(AcademicYear, pk=academic_year_id, school=school)
+    term = get_object_or_404(Term, pk=term_id, academic_year=academic_year)
+    if not term.start_date <= attendance_date <= term.end_date:
+        raise ValidationError({"attendance_date": "Attendance date must fall within the selected term."})
+    return school_class, academic_year, term
+
+
+def attendance_roster(*, school, school_class, academic_year, term, attendance_date):
+    enrollments = list(
+        StudentEnrollment.objects.filter(
+            school_class=school_class,
+            academic_year=academic_year,
+            student__school=school,
+            student__is_active=True,
+            enrolled_on__lte=attendance_date,
+        ).filter(Q(left_on__isnull=True) | Q(left_on__gte=attendance_date)).select_related("student").order_by("student__last_name", "student__first_name", "id")
+    )
+    records = AttendanceRecord.objects.filter(enrollment__in=enrollments, term=term, attendance_date=attendance_date)
+    by_enrollment = {record.enrollment_id: record for record in records}
+    return {
+        "school_class": school_class.id,
+        "class_name": school_class.name,
+        "academic_year": academic_year.id,
+        "academic_year_name": academic_year.name,
+        "term": term.id,
+        "term_name": term.name,
+        "attendance_date": attendance_date.isoformat(),
+        "students": [
+            {
+                "enrollment": enrollment.id,
+                "student": enrollment.student_id,
+                "display_name": f"{enrollment.student.first_name} {enrollment.student.last_name}".strip(),
+                "admission_number": enrollment.student.admission_number,
+                "attendance": None if not (record := by_enrollment.get(enrollment.id)) else {"status": record.status, "updated_at": record.updated_at.isoformat()},
+            }
+            for enrollment in enrollments
+        ],
+    }
+
+
+class AttendanceRosterView(APIView):
+    permission_classes = [IsSchoolAdministrator]
+
+    def get(self, request):
+        required = ("school_class", "academic_year", "term", "attendance_date")
+        if any(not request.query_params.get(key) for key in required):
+            raise ValidationError({"detail": "school_class, academic_year, term, and attendance_date are required."})
+        attendance_date = parse_date(request.query_params["attendance_date"])
+        if not attendance_date:
+            raise ValidationError({"attendance_date": "Use YYYY-MM-DD."})
+        school = request.user.school_administrator.school
+        school_class, academic_year, term = attendance_context(
+            school=school,
+            school_class_id=request.query_params["school_class"],
+            academic_year_id=request.query_params["academic_year"],
+            term_id=request.query_params["term"],
+            attendance_date=attendance_date,
+        )
+        return Response(attendance_roster(school=school, school_class=school_class, academic_year=academic_year, term=term, attendance_date=attendance_date))
+
+
+class AttendanceBulkView(IdempotentCreateMixin, APIView):
+    permission_classes = [IsSchoolAdministrator]
+
+    def get_school(self):
+        return self.request.user.school_administrator.school
+
+    def post(self, request):
+        return self.idempotent_create(request, lambda: self.post_once(request))
+
+    @transaction.atomic
+    def post_once(self, request):
+        serializer = AttendanceBulkSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        school = self.get_school()
+        school_class, academic_year, term = attendance_context(
+            school=school,
+            school_class_id=data["school_class"],
+            academic_year_id=data["academic_year"],
+            term_id=data["term"],
+            attendance_date=data["attendance_date"],
+        )
+        enrollments = list(
+            StudentEnrollment.objects.select_for_update().filter(
+                school_class=school_class, academic_year=academic_year, student__school=school, student__is_active=True,
+                enrolled_on__lte=data["attendance_date"],
+            ).filter(Q(left_on__isnull=True) | Q(left_on__gte=data["attendance_date"])).select_related("student")
+        )
+        enrollment_ids = {enrollment.id for enrollment in enrollments}
+        submitted = {entry["enrollment"]: entry for entry in data["entries"]}
+        if set(submitted) != enrollment_ids:
+            raise ValidationError({"entries": "Attendance must include the complete current class roster. Refresh the roster and try again."})
+        records = AttendanceRecord.objects.select_for_update().filter(enrollment_id__in=enrollment_ids, term=term, attendance_date=data["attendance_date"])
+        existing = {record.enrollment_id: record for record in records}
+        conflicts = []
+        for enrollment in enrollments:
+            record, entry = existing.get(enrollment.id), submitted[enrollment.id]
+            known = entry.get("last_known_updated_at")
+            if record and (known is None or record.updated_at != known):
+                conflicts.append({"enrollment": enrollment.id, "student": f"{enrollment.student.first_name} {enrollment.student.last_name}".strip(), "offline_status": entry["status"], "server_status": record.status, "server_updated_at": record.updated_at.isoformat()})
+        if conflicts:
+            return Response({"detail": "Attendance changed on the server. Review the current roster before retrying.", "conflicts": conflicts}, status=status.HTTP_409_CONFLICT)
+        created = 0
+        for enrollment in enrollments:
+            record = existing.get(enrollment.id)
+            if record:
+                record.status = submitted[enrollment.id]["status"]
+                record.recorded_by = request.user
+                record.save(update_fields=["status", "recorded_by", "updated_at"])
+            else:
+                AttendanceRecord.objects.create(school=school, enrollment=enrollment, academic_year=academic_year, term=term, attendance_date=data["attendance_date"], status=submitted[enrollment.id]["status"], recorded_by=request.user)
+                created += 1
+        log_action(school=school, actor=request.user, action="attendance_bulk_saved", resource=school_class, description=f"Attendance saved for {school_class.name} on {data['attendance_date']}")
+        return Response({"created": created, "updated": len(enrollments) - created, "roster": attendance_roster(school=school, school_class=school_class, academic_year=academic_year, term=term, attendance_date=data["attendance_date"])}, status=status.HTTP_200_OK)
+
+
 class StudentFeeAssignmentViewSet(SchoolAdminViewSet):
     queryset = StudentFeeAssignment.objects.all()
     serializer_class = StudentFeeAssignmentSerializer
@@ -1304,7 +1605,7 @@ class HomeworkAttachmentActionsMixin:
             raise Http404("Attachment file is unavailable.") from exc
 
 
-class HomeworkViewSet(HomeworkAttachmentActionsMixin, SchoolAdminViewSet):
+class HomeworkViewSet(HomeworkAttachmentActionsMixin, IdempotentCreateMixin, SchoolAdminViewSet):
     queryset = Homework.objects.all()
     serializer_class = HomeworkSerializer
     parser_classes = [MultiPartParser, FormParser, JSONParser]
@@ -1355,12 +1656,171 @@ class ParentHomeworkViewSet(HomeworkAttachmentActionsMixin, viewsets.ReadOnlyMod
         return context
 
 
-class PlatformSchoolViewSet(viewsets.ModelViewSet):
-    """Platform administrators can manage school accounts, not school-private data."""
+class PlatformDashboardView(APIView):
+    """Operational aggregates only; private tenant records never leave here."""
 
-    queryset = School.objects.all()
-    serializer_class = SchoolSerializer
     permission_classes = [IsPlatformAdministrator]
+
+    def get(self, request):
+        schools = School.objects.all()
+        actions = AuditLog.objects.filter(actor__role=User.Role.PLATFORM_ADMIN).select_related("actor", "school")[:10]
+        return Response({
+            "total_schools": schools.count(),
+            "active_schools": schools.filter(status=School.Status.ACTIVE, is_active=True).count(),
+            "suspended_schools": schools.filter(status=School.Status.SUSPENDED).count(),
+            "archived_schools": schools.filter(status=School.Status.ARCHIVED).count(),
+            "total_school_administrators": SchoolAdministrator.objects.count(),
+            "total_students": Student.objects.count(),
+            "recently_created_schools": PlatformSchoolSerializer(schools.order_by("-created_at", "-id")[:10], many=True).data,
+            "recent_actions": [
+                {
+                    "action": entry.action,
+                    "target_type": entry.resource_type,
+                    "target_id": entry.resource_id,
+                    "school_id": entry.school_id,
+                    "created_at": entry.created_at,
+                    "actor": entry.actor.username if entry.actor_id else "System",
+                }
+                for entry in actions
+            ],
+        })
+
+
+class PlatformAuditView(APIView):
+    """Read-only, safe operator audit history across schools."""
+
+    permission_classes = [IsPlatformAdministrator]
+
+    def get(self, request):
+        rows = AuditLog.objects.filter(actor__role=User.Role.PLATFORM_ADMIN).select_related("actor").order_by("-created_at", "-id")[:100]
+        def safe(value):
+            # Defensive future-proofing: audit descriptions must never become
+            # a credential transport channel.
+            text = value or ""
+            return "[redacted]" if any(word in text.lower() for word in ("password", "token", "secret", "authorization", "database_url")) else text
+        return Response([{
+            "id": row.id, "timestamp": row.created_at, "actor": row.actor.username if row.actor_id else "System",
+            "action": row.action, "target_type": row.resource_type, "target_id": row.resource_id,
+            "summary": safe(row.description),
+        } for row in rows])
+
+
+class PlatformSchoolViewSet(viewsets.ModelViewSet):
+    """Platform operators manage school lifecycle, never school-private data."""
+
+    queryset = School.objects.all().order_by("name", "id")
+    permission_classes = [IsPlatformAdministrator]
+    http_method_names = ["get", "post", "put", "patch", "head", "options"]
+
+    def get_serializer_class(self):
+        return PlatformSchoolProvisionSerializer if self.action == "create" else PlatformSchoolSerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if query := self.request.query_params.get("q", "").strip():
+            queryset = queryset.filter(Q(name__icontains=query) | Q(email__icontains=query) | Q(phone_number__icontains=query))
+        if status_value := self.request.query_params.get("status"):
+            queryset = queryset.filter(status=status_value)
+        return queryset
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        admin_data = data.pop("administrator")
+        school, administrator, temporary_password = provision_school(school_data=data, admin_data=admin_data)
+        log_action(school=school, actor=request.user, action="platform_school_created", resource=school, description="School provisioned")
+        log_action(school=school, actor=request.user, action="platform_administrator_created", resource=administrator, description="Initial school administrator provisioned")
+        return Response({
+            "school": PlatformSchoolSerializer(school).data,
+            "administrator": PlatformAdministratorSerializer(administrator).data,
+            "temporary_password": temporary_password,
+        }, status=status.HTTP_201_CREATED)
+
+    def perform_update(self, serializer):
+        school = serializer.save()
+        log_action(school=school, actor=self.request.user, action="platform_school_edited", resource=school, description="School details updated")
+
+    def _set_status(self, request, status_value, action_name, description):
+        school = self.get_object()
+        school.status = status_value
+        school.is_active = status_value == School.Status.ACTIVE
+        school.save(update_fields=["status", "is_active"])
+        log_action(school=school, actor=request.user, action=action_name, resource=school, description=description)
+        return Response(PlatformSchoolSerializer(school).data)
+
+    @action(detail=True, methods=["post"])
+    def activate(self, request, pk=None):
+        return self._set_status(request, School.Status.ACTIVE, "platform_school_reactivated", "School activated")
+
+    @action(detail=True, methods=["post"])
+    def suspend(self, request, pk=None):
+        return self._set_status(request, School.Status.SUSPENDED, "platform_school_suspended", "School suspended")
+
+    @action(detail=True, methods=["post"])
+    def archive(self, request, pk=None):
+        return self._set_status(request, School.Status.ARCHIVED, "platform_school_archived", "School archived")
+
+
+class PlatformSchoolAdministratorsView(APIView):
+    permission_classes = [IsPlatformAdministrator]
+
+    def get_school(self, school_id):
+        return get_object_or_404(School, pk=school_id)
+
+    def get(self, request, school_id):
+        administrators = SchoolAdministrator.objects.filter(school=self.get_school(school_id)).select_related("user").order_by("user__username")
+        return Response(PlatformAdministratorSerializer(administrators, many=True).data)
+
+    def post(self, request, school_id):
+        school = self.get_school(school_id)
+        serializer = PlatformAdministratorProvisionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        administrator, temporary_password = create_school_administrator(school=school, admin_data=serializer.validated_data)
+        log_action(school=school, actor=request.user, action="platform_administrator_created", resource=administrator, description="School administrator provisioned")
+        return Response({"administrator": PlatformAdministratorSerializer(administrator).data, "temporary_password": temporary_password}, status=status.HTTP_201_CREATED)
+
+
+class PlatformSchoolAdministratorActionView(APIView):
+    permission_classes = [IsPlatformAdministrator]
+
+    def post(self, request, school_id, administrator_id, operation):
+        administrator = get_object_or_404(SchoolAdministrator.objects.select_related("user"), pk=administrator_id, school_id=school_id)
+        user = administrator.user
+        if operation == "disable":
+            user.is_active = False
+            user.token_version += 1
+            user.save(update_fields=["is_active", "token_version"])
+            action_name, description = "platform_administrator_disabled", "School administrator disabled"
+            result = {"administrator": PlatformAdministratorSerializer(administrator).data}
+        elif operation == "reactivate":
+            user.is_active = True
+            user.save(update_fields=["is_active"])
+            action_name, description = "platform_administrator_reactivated", "School administrator reactivated"
+            result = {"administrator": PlatformAdministratorSerializer(administrator).data}
+        elif operation == "reset-password":
+            temporary_password = reset_administrator_password(administrator)
+            action_name, description = "platform_administrator_password_regenerated", "Temporary password regenerated"
+            result = {"administrator": PlatformAdministratorSerializer(administrator).data, "temporary_password": temporary_password}
+        else:
+            raise Http404
+        log_action(school=administrator.school, actor=request.user, action=action_name, resource=administrator, description=description)
+        return Response(result)
+
+
+class PasswordChangeView(APIView):
+    """The one protected endpoint allowed while a password change is required."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = PasswordChangeSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        user = request.user
+        user.set_password(serializer.validated_data["new_password"])
+        user.must_change_password = False
+        user.save(update_fields=["password", "must_change_password"])
+        return Response({"detail": "Password changed successfully."})
 
 
 class CurrentUserView(APIView):

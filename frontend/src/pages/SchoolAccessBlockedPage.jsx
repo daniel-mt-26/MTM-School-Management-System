@@ -1,0 +1,4 @@
+import { useContext } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { AuthContext } from '../auth/context'
+export default function SchoolAccessBlockedPage(){const {accessBlocked,logout}=useContext(AuthContext);const navigate=useNavigate();const archived=accessBlocked==='school_archived';return <main className="login-page"><section className="login-card"><h1>{archived?'School no longer active':'School access suspended'}</h1><p className="login-copy">{archived?'This school is no longer active on MTM SMS.':'Your school\'s MTM SMS access is currently suspended. Contact your school or MTM administrator.'}</p><p className="login-copy">Your offline work remains on this device and will not synchronize while access is blocked.</p><button onClick={()=>{logout('',true);navigate('/login',{replace:true})}}>Log out</button></section></main>}

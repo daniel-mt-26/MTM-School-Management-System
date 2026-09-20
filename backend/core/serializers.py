@@ -5,12 +5,14 @@ from zipfile import BadZipFile, ZipFile
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.contrib.auth.password_validation import validate_password
+from django.db.models import Case, F, IntegerField, Sum, When
 from django.utils import timezone
 from rest_framework import serializers
 from PIL import Image, UnidentifiedImageError
 
 from .models import (
     AcademicResult,
+    AttendanceRecord,
     AcademicYear,
     AuditLog,
     Announcement,
@@ -21,6 +23,10 @@ from .models import (
     FinancialLedgerEntry,
     Homework,
     HomeworkAttachment,
+    InventoryCategory,
+    InventoryItem,
+    InventoryStockMovement,
+    InventoryVariant,
     Notification,
     Parent,
     ParentCommunicationPreference,
@@ -30,6 +36,7 @@ from .models import (
     RecurringFeeTemplate,
     ReportCard,
     School,
+    SchoolAdministrator,
     SchoolCommunicationSettings,
     SchoolClass,
     Student,
@@ -214,6 +221,95 @@ class SchoolSerializer(serializers.ModelSerializer):
         model = School
         fields = ["id", "name", "email", "phone_number", "address", "is_active", "created_at"]
         read_only_fields = ["id", "created_at"]
+
+
+class PlatformSchoolSerializer(serializers.ModelSerializer):
+    """Platform-only operational information; no school-private records."""
+
+    class Meta:
+        model = School
+        fields = ["id", "name", "email", "phone_number", "address", "default_currency", "status", "created_at"]
+        read_only_fields = ["id", "status", "created_at"]
+
+
+class PlatformSchoolProvisionSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=200)
+    email = serializers.EmailField()
+    phone_number = serializers.CharField(max_length=30)
+    address = serializers.CharField(required=False, allow_blank=True)
+    default_currency = serializers.CharField(required=False, max_length=3)
+    administrator = serializers.DictField(write_only=True)
+
+    def validate(self, attrs):
+        if School.objects.filter(name=attrs["name"]).exists():
+            raise serializers.ValidationError({"name": "A school with this name already exists."})
+        if School.objects.filter(email=attrs["email"]).exists():
+            raise serializers.ValidationError({"email": "A school with this email already exists."})
+        admin = attrs["administrator"]
+        allowed = {"username", "email", "first_name", "last_name"}
+        unexpected = set(admin) - allowed
+        if unexpected:
+            raise serializers.ValidationError({"administrator": f"Unsupported fields: {', '.join(sorted(unexpected))}."})
+        username = str(admin.get("username", "")).strip()
+        if not username:
+            raise serializers.ValidationError({"administrator": {"username": "This field is required."}})
+        if User.objects.filter(username=username).exists():
+            raise serializers.ValidationError({"administrator": {"username": "This username is already in use."}})
+        admin_email = str(admin.get("email", "")).strip()
+        if admin_email and User.objects.filter(email=admin_email).exists():
+            raise serializers.ValidationError({"administrator": {"email": "This email is already in use."}})
+        attrs["administrator"] = {key: str(value).strip() for key, value in admin.items() if key in allowed}
+        attrs["administrator"]["username"] = username
+        return attrs
+
+
+class PlatformAdministratorSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source="user.username", read_only=True)
+    email = serializers.EmailField(source="user.email", read_only=True)
+    first_name = serializers.CharField(source="user.first_name", read_only=True)
+    last_name = serializers.CharField(source="user.last_name", read_only=True)
+    is_active = serializers.BooleanField(source="user.is_active", read_only=True)
+    must_change_password = serializers.BooleanField(source="user.must_change_password", read_only=True)
+    last_login = serializers.DateTimeField(source="user.last_login", read_only=True)
+
+    class Meta:
+        model = SchoolAdministrator
+        fields = ["id", "username", "email", "first_name", "last_name", "is_active", "must_change_password", "last_login", "created_at"]
+        read_only_fields = fields
+
+
+class PlatformAdministratorProvisionSerializer(serializers.Serializer):
+    username = serializers.CharField(max_length=150)
+    email = serializers.EmailField(required=False, allow_blank=True)
+    first_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    last_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+
+    def validate_username(self, value):
+        if User.objects.filter(username=value).exists():
+            raise serializers.ValidationError("This username is already in use.")
+        return value
+
+    def validate_email(self, value):
+        if value and User.objects.filter(email=value).exists():
+            raise serializers.ValidationError("This email is already in use.")
+        return value
+
+
+class PasswordChangeSerializer(serializers.Serializer):
+    current_password = serializers.CharField(write_only=True, trim_whitespace=False)
+    new_password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def validate_current_password(self, value):
+        if not self.context["request"].user.check_password(value):
+            raise serializers.ValidationError("Current password is incorrect.")
+        return value
+
+    def validate(self, attrs):
+        try:
+            validate_password(attrs["new_password"], self.context["request"].user)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"new_password": exc.messages}) from exc
+        return attrs
 
 
 class SchoolProfileSerializer(serializers.ModelSerializer):
@@ -611,6 +707,26 @@ class StudentEnrollmentSerializer(SchoolScopedSerializerMixin, serializers.Model
         read_only_fields = ["id"]
 
 
+class AttendanceEntrySerializer(serializers.Serializer):
+    enrollment = serializers.IntegerField(min_value=1)
+    status = serializers.ChoiceField(choices=AttendanceRecord.Status.choices)
+    last_known_updated_at = serializers.DateTimeField(required=False, allow_null=True)
+
+
+class AttendanceBulkSerializer(serializers.Serializer):
+    school_class = serializers.IntegerField(min_value=1)
+    academic_year = serializers.IntegerField(min_value=1)
+    term = serializers.IntegerField(min_value=1)
+    attendance_date = serializers.DateField()
+    entries = AttendanceEntrySerializer(many=True, allow_empty=False)
+
+    def validate(self, attrs):
+        entry_ids = [entry["enrollment"] for entry in attrs["entries"]]
+        if len(entry_ids) != len(set(entry_ids)):
+            raise serializers.ValidationError({"entries": "Each enrollment may appear only once."})
+        return attrs
+
+
 class FeeSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
     scoped_related_fields = {
         "academic_year": (AcademicYear, "school"),
@@ -766,6 +882,185 @@ class ExpenseSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer
             "created_at", "updated_at",
         ]
         read_only_fields = ["id", "currency", "recorded_by", "recorded_by_name", "created_at", "updated_at"]
+
+
+class InventoryCategorySerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    def validate(self, attrs):
+        if "school" in self.initial_data or "school_id" in self.initial_data:
+            raise serializers.ValidationError({"school": "School ownership is controlled by the authenticated account."})
+        attrs = super().validate(attrs)
+        name = attrs.get("name", getattr(self.instance, "name", ""))
+        duplicates = InventoryCategory.objects.filter(school=self.get_school(), name=name)
+        if self.instance:
+            duplicates = duplicates.exclude(pk=self.instance.pk)
+        if duplicates.exists():
+            raise serializers.ValidationError({"name": "This school already has an inventory category with this name."})
+        return attrs
+
+    class Meta:
+        model = InventoryCategory
+        fields = ["id", "name", "description", "is_active", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at"]
+        validators = []
+
+
+class InventoryVariantSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    scoped_related_fields = {"item": (InventoryItem, "school")}
+    code = serializers.CharField(required=False, allow_blank=True)
+    item_name = serializers.CharField(source="item.name", read_only=True)
+    available_stock = serializers.SerializerMethodField()
+
+    def get_available_stock(self, variant):
+        return getattr(variant, "current_stock", None) if hasattr(variant, "current_stock") else sum(
+            movement.quantity if movement.direction == InventoryStockMovement.Direction.IN else -movement.quantity
+            for movement in variant.stock_movements.all()
+        )
+
+    def validate(self, attrs):
+        if "school" in self.initial_data or "school_id" in self.initial_data:
+            raise serializers.ValidationError({"school": "School ownership is controlled by the authenticated account."})
+        attrs = super().validate(attrs)
+        item = attrs.get("item", getattr(self.instance, "item", None))
+        name = attrs.get("name", getattr(self.instance, "name", ""))
+        code = attrs.get("code", getattr(self.instance, "code", ""))
+        duplicates = InventoryVariant.objects.filter(item=item)
+        if self.instance:
+            duplicates = duplicates.exclude(pk=self.instance.pk)
+        if duplicates.filter(name=name).exists():
+            raise serializers.ValidationError({"name": "An item cannot have two variants with the same name."})
+        if code and duplicates.filter(code=code).exists():
+            raise serializers.ValidationError({"code": "This item already has a variant with this code."})
+        return attrs
+
+    class Meta:
+        model = InventoryVariant
+        fields = ["id", "item", "item_name", "name", "code", "is_active", "available_stock", "created_at", "updated_at"]
+        read_only_fields = ["id", "item_name", "available_stock", "created_at", "updated_at"]
+        validators = []
+
+
+class InventoryItemSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    scoped_related_fields = {"category": (InventoryCategory, "school")}
+    code = serializers.CharField(required=False, allow_blank=True)
+    category_name = serializers.CharField(source="category.name", read_only=True)
+    available_stock = serializers.SerializerMethodField()
+    stock_status = serializers.SerializerMethodField()
+    quantity_required_to_minimum = serializers.SerializerMethodField()
+    variants = InventoryVariantSerializer(many=True, read_only=True)
+
+    def get_available_stock(self, item):
+        return getattr(item, "current_stock", None) if hasattr(item, "current_stock") else sum(
+            movement.quantity if movement.direction == InventoryStockMovement.Direction.IN else -movement.quantity
+            for movement in item.stock_movements.all()
+        )
+
+    def get_stock_status(self, item):
+        current = self.get_available_stock(item)
+        if current <= 0:
+            return "out_of_stock"
+        if current <= item.minimum_stock_level:
+            return "low_stock"
+        return "in_stock"
+
+    def get_quantity_required_to_minimum(self, item):
+        return max(0, item.minimum_stock_level - self.get_available_stock(item))
+
+    def validate(self, attrs):
+        if "school" in self.initial_data or "school_id" in self.initial_data:
+            raise serializers.ValidationError({"school": "School ownership is controlled by the authenticated account."})
+        candidate = copy(self.instance) if self.instance is not None else InventoryItem(school=self.get_school())
+        for name, value in attrs.items():
+            setattr(candidate, name, value)
+        try:
+            candidate.clean()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(getattr(exc, "message_dict", {"non_field_errors": exc.messages})) from exc
+        duplicates = InventoryItem.objects.filter(school=self.get_school())
+        if self.instance:
+            duplicates = duplicates.exclude(pk=self.instance.pk)
+        if duplicates.filter(name=candidate.name).exists():
+            raise serializers.ValidationError({"name": "This school already has an inventory item with this name."})
+        if candidate.code and duplicates.filter(code=candidate.code).exists():
+            raise serializers.ValidationError({"code": "This school already has an inventory item with this code."})
+        return attrs
+
+    class Meta:
+        model = InventoryItem
+        fields = [
+            "id", "category", "category_name", "name", "code", "description", "unit",
+            "minimum_stock_level", "cost_per_unit", "storage_location", "is_active",
+            "available_stock", "stock_status", "quantity_required_to_minimum", "variants",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "category_name", "available_stock", "stock_status", "quantity_required_to_minimum", "variants", "created_at", "updated_at"]
+        validators = []
+
+
+class InventoryStockMovementSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    scoped_related_fields = {
+        "item": (InventoryItem, "school"),
+        "variant": (InventoryVariant, "item__school"),
+    }
+    item_name = serializers.CharField(source="item.name", read_only=True)
+    variant_name = serializers.CharField(source="variant.name", read_only=True)
+    created_by_name = serializers.SerializerMethodField()
+    signed_quantity = serializers.SerializerMethodField()
+
+    def get_created_by_name(self, movement):
+        return movement.created_by.get_full_name() or movement.created_by.username
+
+    def get_signed_quantity(self, movement):
+        return movement.quantity if movement.direction == InventoryStockMovement.Direction.IN else -movement.quantity
+
+    def movement_candidate(self, attrs):
+        candidate = InventoryStockMovement(school=self.get_school(), created_by=self.context["request"].user)
+        for name, value in attrs.items():
+            setattr(candidate, name, value)
+        return candidate
+
+    def current_stock(self, candidate):
+        movements = InventoryStockMovement.objects.filter(item=candidate.item)
+        if candidate.variant_id:
+            movements = movements.filter(variant=candidate.variant)
+        return movements.aggregate(total=Sum(Case(
+            When(direction=InventoryStockMovement.Direction.IN, then=F("quantity")),
+            default=-F("quantity"),
+            output_field=IntegerField(),
+        )))["total"] or 0
+
+    def validate_stock_rules(self, candidate):
+        active_variants = candidate.item.variants.filter(is_active=True)
+        if active_variants.exists() and not candidate.variant_id:
+            raise serializers.ValidationError({"variant": "An active variant is required for this item."})
+        if candidate.variant_id and not candidate.variant.is_active:
+            raise serializers.ValidationError({"variant": "Inactive variants cannot receive new stock movements."})
+        if candidate.movement_type == InventoryStockMovement.MovementType.ADJUSTMENT and not candidate.notes.strip():
+            raise serializers.ValidationError({"notes": "A reason is required for a stock adjustment."})
+        if candidate.direction == InventoryStockMovement.Direction.OUT and candidate.quantity > self.current_stock(candidate):
+            raise serializers.ValidationError({"quantity": "This movement would reduce available stock below zero."})
+
+    def validate(self, attrs):
+        for field in ("school", "school_id", "created_by", "created_by_id"):
+            if field in self.initial_data:
+                raise serializers.ValidationError({field: "This field is set by the server."})
+        candidate = copy(self.instance) if self.instance else self.movement_candidate(attrs)
+        if self.instance:
+            for name, value in attrs.items():
+                setattr(candidate, name, value)
+        try:
+            candidate.clean()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(getattr(exc, "message_dict", {"non_field_errors": exc.messages})) from exc
+        self.validate_stock_rules(candidate)
+        return attrs
+
+    class Meta:
+        model = InventoryStockMovement
+        fields = [
+            "id", "item", "item_name", "variant", "variant_name", "movement_type", "direction",
+            "quantity", "signed_quantity", "unit_cost", "notes", "created_by", "created_by_name", "created_at",
+        ]
+        read_only_fields = ["id", "item_name", "variant_name", "signed_quantity", "created_by", "created_by_name", "created_at"]
 
 
 class AcademicResultSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
@@ -1036,4 +1331,4 @@ class ParentReportCardSerializer(serializers.ModelSerializer):
 class CurrentUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ["id", "username", "first_name", "last_name", "role"]
+        fields = ["id", "username", "first_name", "last_name", "role", "must_change_password"]

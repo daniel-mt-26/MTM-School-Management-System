@@ -1,5 +1,4 @@
-import DashboardLayout from './DashboardLayout'
-
-export default function PlatformDashboard() {
-  return <DashboardLayout title="MTM Platform" description="Platform administration features will be added here." />
-}
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { platformDashboard } from '../api/platform'
+export default function PlatformDashboard(){const [d,setD]=useState(null);const[e,setE]=useState('');useEffect(()=>{platformDashboard().then(setD).catch(()=>setE('Platform information could not be loaded.'))},[]);if(e)return <main className="student-page"><p className="form-error">{e}</p></main>;if(!d)return <main className="school-profile-state">Loading platform dashboard…</main>;const cards=[['Total Schools',d.total_schools],['Active Schools',d.active_schools],['Suspended Schools',d.suspended_schools],['Archived Schools',d.archived_schools],['School Administrators',d.total_school_administrators],['Total Students',d.total_students]];return <main className="student-page"><header className="student-page-header"><div><h1>MTM Platform</h1><p>Operational overview across schools.</p></div><Link className="primary-link" to="/platform/schools/new">Create school</Link></header><nav className="communication-nav"><Link to="/platform/schools">Schools</Link><Link to="/platform/audit">Platform audit</Link></nav><section className="dashboard-navigation">{cards.map(([l,v])=><div className="dashboard-card" key={l}><h2>{v}</h2><p>{l}</p></div>)}</section><section className="profile-section"><h2>Recently created schools</h2>{d.recently_created_schools.map(s=><p key={s.id}><Link to={`/platform/schools/${s.id}`}>{s.name}</Link> · {s.status}</p>)}</section></main>}

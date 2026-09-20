@@ -13,6 +13,7 @@ class IsSchoolAdministrator(BasePermission):
             and user.is_authenticated
             and user.role == User.Role.SCHOOL_ADMIN
             and hasattr(user, "school_administrator")
+            and not user.must_change_password
         )
 
 
@@ -26,6 +27,7 @@ class IsParent(BasePermission):
             and user.is_authenticated
             and user.role == User.Role.PARENT
             and hasattr(user, "parent_profile")
+            and not user.must_change_password
         )
 
 

@@ -2,12 +2,14 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
 import tempfile
+import uuid
 from zipfile import ZipFile
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.exceptions import ImproperlyConfigured
+from django.db import OperationalError
 from django.core.management import call_command
 from django.test import SimpleTestCase, override_settings
 from django.urls import reverse
@@ -17,6 +19,7 @@ from rest_framework.test import APITestCase
 
 from .models import (
     AcademicResult,
+    AttendanceRecord,
     AcademicYear,
     AuditLog,
     ClassSubject,
@@ -27,6 +30,11 @@ from .models import (
     Homework,
     HomeworkAttachment,
     homework_attachment_expiry,
+    InventoryCategory,
+    InventoryItem,
+    InventoryStockMovement,
+    InventoryVariant,
+    IdempotencyRecord,
     Notification,
     Parent,
     ParentCommunicationPreference,
@@ -108,6 +116,23 @@ class MediaStorageConfigurationTests(SimpleTestCase):
         self.assertIn("Traceback (most recent call last):", captured.output[0])
         self.assertIn("in test_unexpected_api_error_logs_location_without_secret_message", captured.output[0])
         self.assertNotIn("secret-value", captured.output[0])
+
+    def test_database_failure_category_does_not_return_connection_details(self):
+        from .exceptions import database_failure_category
+
+        examples = (
+            ("could not translate host name private.example", "dns_resolution"),
+            ("password authentication failed for user private-user", "authentication"),
+            ("SSL certificate verify failed private.example", "ssl"),
+            ("connection timed out at private.example", "timeout"),
+            ("connection refused at private.example", "connection_refused"),
+            ("too many connections for private-user", "connection_limit"),
+            ("server closed the connection unexpectedly", "connection_closed"),
+            ("prepared statement does not exist", "pooler_incompatibility"),
+        )
+        for message, category in examples:
+            with self.subTest(category=category):
+                self.assertEqual(database_failure_category(OperationalError(message)), category)
 
 
 class TenantIsolationTests(APITestCase):
@@ -913,6 +938,144 @@ class TenantIsolationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["role"], User.Role.SCHOOL_ADMIN)
 
+    def test_inventory_categories_items_variants_and_movement_stock_calculation(self):
+        self.authenticate(self.admin_a)
+        category = self.client.post("/api/school/inventory/categories/", {"name": "Uniform", "description": "School clothing"}, format="json")
+        self.assertEqual(category.status_code, status.HTTP_201_CREATED)
+        duplicate_category = self.client.post("/api/school/inventory/categories/", {"name": "Uniform"}, format="json")
+        self.assertEqual(duplicate_category.status_code, status.HTTP_400_BAD_REQUEST)
+        item = self.client.post("/api/school/inventory/items/", {
+            "category": category.data["id"], "name": "School Shirt", "code": "SHIRT", "unit": "each",
+            "minimum_stock_level": 20, "storage_location": "Store A",
+        }, format="json")
+        self.assertEqual(item.status_code, status.HTTP_201_CREATED)
+        variant = self.client.post("/api/school/inventory/variants/", {"item": item.data["id"], "name": "Size 30"}, format="json")
+        self.assertEqual(variant.status_code, status.HTTP_201_CREATED, variant.data)
+        for movement_type, direction, quantity in (("restock", "in", 25), ("issued", "out", 10), ("returned", "in", 2)):
+            response = self.client.post("/api/school/inventory/movements/", {
+                "item": item.data["id"], "variant": variant.data["id"], "movement_type": movement_type,
+                "direction": direction, "quantity": quantity, "notes": "Stock test",
+            }, format="json")
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        listed = self.client.get("/api/school/inventory/items/")
+        self.assertEqual(listed.status_code, status.HTTP_200_OK)
+        shirt = next(row for row in listed.data if row["id"] == item.data["id"])
+        self.assertEqual(shirt["available_stock"], 17)
+        self.assertEqual(shirt["stock_status"], "low_stock")
+        self.assertEqual(shirt["quantity_required_to_minimum"], 3)
+        self.assertEqual(shirt["variants"][0]["available_stock"], 17)
+        summary = self.client.get("/api/school/inventory/summary/")
+        self.assertEqual(summary.status_code, status.HTTP_200_OK)
+        self.assertEqual(summary.data["total_active_items"], 1)
+        self.assertEqual([row["id"] for row in summary.data["low_stock_items"]], [item.data["id"]])
+        self.assertEqual(len(summary.data["recent_stock_movements"]), 3)
+        self.assertEqual(InventoryStockMovement.objects.filter(item_id=item.data["id"]).count(), 3)
+
+    def test_inventory_out_of_stock_tenant_isolation_and_cross_school_rejection(self):
+        category_a = InventoryCategory.objects.create(school=self.school_a, name="Stationery")
+        category_b = InventoryCategory.objects.create(school=self.school_b, name="Cleaning")
+        item_a = InventoryItem.objects.create(school=self.school_a, category=category_a, name="Exercise Book", minimum_stock_level=5)
+        item_b = InventoryItem.objects.create(school=self.school_b, category=category_b, name="Soap")
+        variant_b = InventoryVariant.objects.create(item=item_b, name="500ml")
+        self.authenticate(self.admin_a)
+        items = self.client.get("/api/school/inventory/items/?out_of_stock=true")
+        self.assertEqual(items.status_code, status.HTTP_200_OK)
+        self.assertEqual([row["id"] for row in items.data], [item_a.id])
+        self.assertEqual(self.client.get(f"/api/school/inventory/items/{item_b.id}/").status_code, status.HTTP_404_NOT_FOUND)
+        wrong_category = self.client.post("/api/school/inventory/items/", {"category": category_b.id, "name": "Cross tenant"}, format="json")
+        self.assertEqual(wrong_category.status_code, status.HTTP_400_BAD_REQUEST)
+        wrong_item = self.client.post("/api/school/inventory/movements/", {"item": item_b.id, "movement_type": "restock", "direction": "in", "quantity": 1}, format="json")
+        self.assertEqual(wrong_item.status_code, status.HTTP_400_BAD_REQUEST)
+        mismatch = self.client.post("/api/school/inventory/movements/", {"item": item_a.id, "variant": variant_b.id, "movement_type": "restock", "direction": "in", "quantity": 1}, format="json")
+        self.assertEqual(mismatch.status_code, status.HTTP_400_BAD_REQUEST)
+        self.authenticate(self.parent_a_user)
+        self.assertEqual(self.client.get("/api/school/inventory/items/").status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_inventory_variant_requirement_and_negative_stock_prevention(self):
+        category = InventoryCategory.objects.create(school=self.school_a, name="Sports")
+        item = InventoryItem.objects.create(school=self.school_a, category=category, name="Football")
+        self.authenticate(self.admin_a)
+        restock = self.client.post("/api/school/inventory/movements/", {"item": item.id, "movement_type": "restock", "direction": "in", "quantity": 5}, format="json")
+        self.assertEqual(restock.status_code, status.HTTP_201_CREATED)
+        for movement_type in ("issued", "sold", "damaged"):
+            response = self.client.post("/api/school/inventory/movements/", {"item": item.id, "movement_type": movement_type, "direction": "out", "quantity": 6}, format="json")
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+            self.assertIn("quantity", response.data)
+        no_reason = self.client.post("/api/school/inventory/movements/", {"item": item.id, "movement_type": "adjustment", "direction": "out", "quantity": 1}, format="json")
+        self.assertEqual(no_reason.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("notes", no_reason.data)
+        variant = InventoryVariant.objects.create(item=item, name="Size 5")
+        missing_variant = self.client.post("/api/school/inventory/movements/", {"item": item.id, "movement_type": "restock", "direction": "in", "quantity": 1}, format="json")
+        self.assertEqual(missing_variant.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("variant", missing_variant.data)
+        variant.is_active = False; variant.save(update_fields=["is_active"])
+        inactive_variant = self.client.post("/api/school/inventory/movements/", {"item": item.id, "variant": variant.id, "movement_type": "restock", "direction": "in", "quantity": 1}, format="json")
+        self.assertEqual(inactive_variant.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("variant", inactive_variant.data)
+
+    def test_inventory_create_replays_same_idempotency_operation_once(self):
+        self.authenticate(self.admin_a)
+        operation_id = str(uuid.uuid4())
+        payload = {"name": "Kitchen"}
+        first = self.client.post("/api/school/inventory/categories/", payload, format="json", HTTP_IDEMPOTENCY_KEY=operation_id)
+        second = self.client.post("/api/school/inventory/categories/", payload, format="json", HTTP_IDEMPOTENCY_KEY=operation_id)
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(second.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(first.data, second.data)
+        self.assertEqual(InventoryCategory.objects.filter(school=self.school_a, name="Kitchen").count(), 1)
+        self.assertEqual(IdempotencyRecord.objects.filter(school=self.school_a, actor=self.admin_a, operation_id=operation_id).count(), 1)
+        conflict = self.client.post("/api/school/inventory/categories/", {"name": "Different"}, format="json", HTTP_IDEMPOTENCY_KEY=operation_id)
+        self.assertEqual(conflict.status_code, status.HTTP_409_CONFLICT)
+
+    def test_attendance_roster_bulk_idempotency_conflict_and_tenant_safety(self):
+        self.authenticate(self.admin_a)
+        attendance_day = date(2026, 1, 11)
+        context = {"school_class": self.class_a.id, "academic_year": self.year_a.id, "term": self.term_a.id, "attendance_date": attendance_day.isoformat()}
+        roster = self.client.get("/api/school/attendance/roster/", context)
+        self.assertEqual(roster.status_code, status.HTTP_200_OK, roster.data)
+        enrollment = next(row for row in roster.data["students"] if row["student"] == self.student_a.id)["enrollment"]
+        payload = {**context, "entries": [{"enrollment": enrollment, "status": "present", "last_known_updated_at": None}]}
+        operation = str(uuid.uuid4())
+        first = self.client.post("/api/school/attendance/bulk/", payload, format="json", HTTP_IDEMPOTENCY_KEY=operation)
+        second = self.client.post("/api/school/attendance/bulk/", payload, format="json", HTTP_IDEMPOTENCY_KEY=operation)
+        self.assertEqual(first.status_code, status.HTTP_200_OK, first.data)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(AttendanceRecord.objects.filter(enrollment_id=enrollment, term=self.term_a, attendance_date=attendance_day).count(), 1)
+        stale = self.client.post("/api/school/attendance/bulk/", payload, format="json", HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()))
+        self.assertEqual(stale.status_code, status.HTTP_409_CONFLICT)
+        wrong = {**payload, "entries": [{"enrollment": self.enrollment_b.id, "status": "absent", "last_known_updated_at": None}]}
+        rejected = self.client.post("/api/school/attendance/bulk/", wrong, format="json", HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()))
+        self.assertEqual(rejected.status_code, status.HTTP_400_BAD_REQUEST)
+        self.authenticate(self.parent_a_user)
+        self.assertEqual(self.client.get("/api/school/attendance/roster/", context).status_code, status.HTTP_403_FORBIDDEN)
+        self.authenticate(self.platform_admin)
+        self.assertEqual(self.client.get("/api/school/attendance/roster/", context).status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_attendance_bulk_is_atomic_and_rejects_stale_or_other_school_rosters(self):
+        attendance_day = date(2026, 1, 11)
+        second_student = self.make_student(self.class_a, "A-002", "Avery")
+        second_enrollment = StudentEnrollment.objects.create(student=second_student, school_class=self.class_a, academic_year=self.year_a, enrolled_on=attendance_day)
+        context = {"school_class": self.class_a.id, "academic_year": self.year_a.id, "term": self.term_a.id, "attendance_date": attendance_day.isoformat()}
+        self.authenticate(self.admin_a)
+        invalid_payload = {**context, "entries": [
+            {"enrollment": self.enrollment_a.id, "status": "present", "last_known_updated_at": None},
+            {"enrollment": self.enrollment_b.id, "status": "absent", "last_known_updated_at": None},
+        ]}
+        response = self.client.post("/api/school/attendance/bulk/", invalid_payload, format="json", HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(AttendanceRecord.objects.filter(school=self.school_a).count(), 0)
+        other_class = self.client.get("/api/school/attendance/roster/", {**context, "school_class": self.class_b.id})
+        self.assertEqual(other_class.status_code, status.HTTP_404_NOT_FOUND)
+        stale_payload = {**context, "entries": [
+            {"enrollment": self.enrollment_a.id, "status": "present", "last_known_updated_at": None},
+            {"enrollment": second_enrollment.id, "status": "present", "last_known_updated_at": None},
+        ]}
+        self.enrollment_a.left_on = date(2026, 1, 10)
+        self.enrollment_a.save(update_fields=["left_on"])
+        stale = self.client.post("/api/school/attendance/bulk/", stale_payload, format="json", HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()))
+        self.assertEqual(stale.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(AttendanceRecord.objects.filter(school=self.school_a).count(), 0)
+
     def test_jwt_login_rejects_invalid_password(self):
         response = self.client.post("/api/auth/token/", {"username": "admin-a", "password": "incorrect-password"}, format="json")
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
@@ -1255,6 +1418,16 @@ class HomeworkTests(APITestCase):
         item = Homework.objects.get(pk=response.data["id"])
         self.assertEqual((item.school, item.created_by), (self.school, self.admin))
 
+    def test_homework_create_replays_idempotency_key(self):
+        self.client.force_authenticate(self.admin)
+        operation = str(uuid.uuid4())
+        first = self.client.post("/api/school/homework/", self.payload(), format="json", HTTP_IDEMPOTENCY_KEY=operation)
+        second = self.client.post("/api/school/homework/", self.payload(), format="json", HTTP_IDEMPOTENCY_KEY=operation)
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(second.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(first.data, second.data)
+        self.assertEqual(Homework.objects.filter(school=self.school, title="Read chapter").count(), 1)
+
     def test_image_document_and_several_attachments(self):
         response = self.create(uploaded_attachments=[self.png(), self.docx(), SimpleUploadedFile("notes.pdf", b"%PDF-1.4\n%%EOF", content_type="application/pdf")])
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -1353,3 +1526,126 @@ class HomeworkTests(APITestCase):
             storage_delete.assert_called_once_with(stored_name)
         self.assertFalse(HomeworkAttachment.objects.filter(pk=attachment.pk).exists())
         self.assertFalse(attachment.file.storage.exists(stored_name))
+
+
+class PlatformAdministratorTests(APITestCase):
+    def setUp(self):
+        self.platform = User.objects.create_user(username="platform", password="Platform-pass-123!", role=User.Role.PLATFORM_ADMIN)
+        self.school = School.objects.create(name="Platform Test School", email="platform-school@example.test", phone_number="1")
+        self.school_admin = User.objects.create_user(username="school-admin", password="School-pass-123!", role=User.Role.SCHOOL_ADMIN)
+        self.administrator = SchoolAdministrator.objects.create(user=self.school_admin, school=self.school)
+        self.parent_user = User.objects.create_user(username="platform-parent", password="Parent-pass-123!", role=User.Role.PARENT)
+        Parent.objects.create(school=self.school, user=self.parent_user, phone_number="2")
+
+    def login(self, username, password):
+        response = self.client.post("/api/auth/token/", {"username": username, "password": password}, format="json")
+        return response
+
+    def use_access(self, access):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+
+    def platform_request(self, method, path, data=None):
+        self.client.force_authenticate(self.platform)
+        response = getattr(self.client, method)(path, data or {}, format="json")
+        self.client.force_authenticate(user=None)
+        return response
+
+    def test_platform_access_and_private_school_denial(self):
+        self.client.force_authenticate(self.school_admin)
+        self.assertEqual(self.client.get("/api/platform/dashboard/").status_code, status.HTTP_403_FORBIDDEN)
+        self.client.force_authenticate(self.parent_user)
+        self.assertEqual(self.client.get("/api/platform/schools/").status_code, status.HTTP_403_FORBIDDEN)
+        self.client.force_authenticate(self.platform)
+        dashboard = self.client.get("/api/platform/dashboard/")
+        self.assertEqual(dashboard.status_code, status.HTTP_200_OK)
+        self.assertEqual(dashboard.data["total_schools"], 1)
+        self.assertEqual(self.client.get("/api/school/classes/").status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_atomic_provisioning_returns_one_temporary_password_and_audits_safely(self):
+        payload = {
+            "name": "Provisioned School", "email": "provisioned@example.test", "phone_number": "3",
+            "administrator": {"username": "provisioned-admin", "email": "provisioned-admin@example.test"},
+        }
+        response = self.platform_request("post", "/api/platform/schools/", payload)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        temporary_password = response.data["temporary_password"]
+        school = School.objects.get(name="Provisioned School")
+        administrator = SchoolAdministrator.objects.get(school=school)
+        self.assertEqual(administrator.user.role, User.Role.SCHOOL_ADMIN)
+        self.assertTrue(administrator.user.must_change_password)
+        self.assertTrue(administrator.user.check_password(temporary_password))
+        self.assertNotEqual(administrator.user.password, temporary_password)
+        entries = AuditLog.objects.filter(school=school)
+        self.assertEqual(entries.count(), 2)
+        self.assertFalse(any(temporary_password in entry.description for entry in entries))
+
+        with patch("core.platform_services.SchoolAdministrator.save", side_effect=RuntimeError("link failure")):
+            with self.assertRaises(RuntimeError):
+                from .platform_services import provision_school
+                provision_school(
+                    school_data={"name": "Atomic Failure", "email": "atomic@example.test", "phone_number": "4"},
+                    admin_data={"username": "atomic-admin"},
+                )
+        self.assertFalse(School.objects.filter(name="Atomic Failure").exists())
+        self.assertFalse(User.objects.filter(username="atomic-admin").exists())
+
+    def test_must_change_password_limits_school_access_until_changed(self):
+        created = self.platform_request("post", "/api/platform/schools/", {
+            "name": "Password School", "email": "password-school@example.test", "phone_number": "5",
+            "administrator": {"username": "password-admin"},
+        })
+        temporary_password = created.data["temporary_password"]
+        token_response = self.login("password-admin", temporary_password)
+        self.assertEqual(token_response.status_code, status.HTTP_200_OK, token_response.data)
+        self.use_access(token_response.data["access"])
+        self.assertTrue(self.client.get("/api/auth/me/").data["must_change_password"])
+        self.assertEqual(self.client.get("/api/school/classes/").status_code, status.HTTP_403_FORBIDDEN)
+        changed = self.client.post("/api/auth/change-password/", {"current_password": temporary_password, "new_password": "Changed-pass-123!"}, format="json")
+        self.assertEqual(changed.status_code, status.HTTP_200_OK, changed.data)
+        self.assertEqual(self.client.get("/api/school/classes/").status_code, status.HTTP_200_OK)
+
+    def test_suspension_blocks_login_refresh_existing_tokens_and_reactivation_restores_access(self):
+        admin_tokens = self.login("school-admin", "School-pass-123!")
+        parent_tokens = self.login("platform-parent", "Parent-pass-123!")
+        self.assertEqual(admin_tokens.status_code, status.HTTP_200_OK)
+        self.assertEqual(parent_tokens.status_code, status.HTTP_200_OK)
+        suspended = self.platform_request("post", f"/api/platform/schools/{self.school.id}/suspend/")
+        self.assertEqual(suspended.status_code, status.HTTP_200_OK)
+        self.use_access(admin_tokens.data["access"])
+        self.assertEqual(self.client.get("/api/school/classes/").status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(self.client.post("/api/school/inventory/categories/", {"name": "Blocked sync"}, format="json", HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4())).status_code, status.HTTP_401_UNAUTHORIZED)
+        self.client.credentials()
+        self.assertEqual(self.login("school-admin", "School-pass-123!").status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(self.login("platform-parent", "Parent-pass-123!").status_code, status.HTTP_401_UNAUTHORIZED)
+        refresh = self.client.post("/api/auth/token/refresh/", {"refresh": admin_tokens.data["refresh"]}, format="json")
+        self.assertEqual(refresh.status_code, status.HTTP_401_UNAUTHORIZED)
+        reactivated = self.platform_request("post", f"/api/platform/schools/{self.school.id}/activate/")
+        self.assertEqual(reactivated.status_code, status.HTTP_200_OK)
+        self.assertEqual(self.login("school-admin", "School-pass-123!").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.platform_request("post", f"/api/platform/schools/{self.school.id}/archive/").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.login("school-admin", "School-pass-123!").status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_disabling_and_resetting_an_administrator_invalidates_existing_tokens_without_suspending_school(self):
+        tokens = self.login("school-admin", "School-pass-123!")
+        disabled = self.platform_request("post", f"/api/platform/schools/{self.school.id}/administrators/{self.administrator.id}/disable/")
+        self.assertEqual(disabled.status_code, status.HTTP_200_OK)
+        self.school.refresh_from_db()
+        self.assertTrue(self.school.is_operational)
+        self.use_access(tokens.data["access"])
+        self.assertEqual(self.client.get("/api/school/classes/").status_code, status.HTTP_401_UNAUTHORIZED)
+        self.client.credentials()
+        self.assertEqual(self.platform_request("post", f"/api/platform/schools/{self.school.id}/administrators/{self.administrator.id}/reactivate/").status_code, status.HTTP_200_OK)
+        active_tokens = self.login("school-admin", "School-pass-123!")
+        self.assertEqual(active_tokens.status_code, status.HTTP_200_OK)
+        reset = self.platform_request("post", f"/api/platform/schools/{self.school.id}/administrators/{self.administrator.id}/reset-password/")
+        self.assertEqual(reset.status_code, status.HTTP_200_OK)
+        temporary_password = reset.data["temporary_password"]
+        self.assertTrue(self.school_admin.check_password(temporary_password) is False)  # stale in-memory object
+        self.school_admin.refresh_from_db()
+        self.assertTrue(self.school_admin.check_password(temporary_password))
+        self.assertTrue(self.school_admin.must_change_password)
+        self.use_access(active_tokens.data["access"])
+        self.assertEqual(self.client.get("/api/auth/me/").status_code, status.HTTP_401_UNAUTHORIZED)
+        self.client.credentials()
+        self.assertEqual(self.client.post("/api/auth/token/refresh/", {"refresh": active_tokens.data["refresh"]}, format="json").status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertFalse(any(temporary_password in row.description for row in AuditLog.objects.filter(school=self.school)))

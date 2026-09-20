@@ -1,21 +1,29 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { getCurrentUser, login, tokenStorage } from '../api/auth'
 import { apiClient, setAuthenticationFailureHandler } from '../api/client'
+import { accountScope, clearOfflineScope } from '../offline/db'
 import { AuthContext } from './context'
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [sessionMessage, setSessionMessage] = useState('')
+  const [accessBlocked, setAccessBlocked] = useState(null)
 
-  const logout = useCallback((message = '') => {
+  const logout = useCallback((message = '', preserveOfflineWork = false) => {
+    const scope = accountScope(user)
+    if (scope && !preserveOfflineWork) void clearOfflineScope(scope).catch(() => {})
     tokenStorage.clear()
     setUser(null)
+    setAccessBlocked(null)
     setSessionMessage(message)
-  }, [])
+  }, [user])
 
   useEffect(() => {
-    setAuthenticationFailureHandler(() => logout('Your session has expired. Please sign in again.'))
+    setAuthenticationFailureHandler((reason) => {
+      if (reason?.code) { setAccessBlocked(reason.code); return }
+      logout('Your session has expired. Please sign in again.', true)
+    })
     return () => setAuthenticationFailureHandler(() => {})
   }, [logout])
 
@@ -29,7 +37,7 @@ export function AuthProvider({ children }) {
       try {
         setUser(await apiClient('/auth/me/'))
       } catch {
-        logout('Your session has expired. Please sign in again.')
+        logout('Your session has expired. Please sign in again.', true)
       } finally {
         setIsLoading(false)
       }
@@ -49,6 +57,7 @@ export function AuthProvider({ children }) {
     try {
       const profile = await getCurrentUser(access)
       setUser(profile)
+      setAccessBlocked(null)
       setSessionMessage('')
       return profile
     } catch (error) {
@@ -58,6 +67,6 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
-  const value = useMemo(() => ({ user, isLoading, sessionMessage, signIn, logout }), [user, isLoading, sessionMessage, signIn, logout])
+  const value = useMemo(() => ({ user, isLoading, sessionMessage, signIn, logout, accessBlocked }), [user, isLoading, sessionMessage, signIn, logout, accessBlocked])
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

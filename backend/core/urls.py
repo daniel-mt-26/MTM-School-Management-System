@@ -1,12 +1,12 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
-from rest_framework_simplejwt.views import TokenRefreshView
-
 from .views import (
     AcademicResultViewSet,
     AcademicYearViewSet,
     AuditLogViewSet,
     AnnouncementViewSet,
+    AttendanceBulkView,
+    AttendanceRosterView,
     AvailableParentView,
     ClassSubjectViewSet,
     CommunicationMessageViewSet,
@@ -14,6 +14,11 @@ from .views import (
     LoginTokenObtainPairView,
     HealthView,
     HomeworkViewSet,
+    InventoryCategoryViewSet,
+    InventoryItemViewSet,
+    InventoryStockMovementViewSet,
+    InventorySummaryView,
+    InventoryVariantViewSet,
     ReadinessView,
     FeeViewSet,
     ExpenseViewSet,
@@ -36,6 +41,12 @@ from .views import (
     ParentStudentViewSet,
     PaymentViewSet,
     PlatformSchoolViewSet,
+    PlatformDashboardView,
+    PlatformAuditView,
+    PlatformSchoolAdministratorsView,
+    PlatformSchoolAdministratorActionView,
+    PasswordChangeView,
+    MTMTokenRefreshView,
     ReceiptViewSet,
     RecurringFeeTemplateViewSet,
     ReportCardViewSet,
@@ -84,6 +95,10 @@ router.register("school/audit", AuditLogViewSet, basename="school-audit")
 router.register("school/parent-links", SchoolParentStudentViewSet, basename="school-parent-link")
 router.register("school/timetables", TimetableEntryViewSet, basename="school-timetable")
 router.register("school/homework", HomeworkViewSet, basename="school-homework")
+router.register("school/inventory/categories", InventoryCategoryViewSet, basename="school-inventory-category")
+router.register("school/inventory/items", InventoryItemViewSet, basename="school-inventory-item")
+router.register("school/inventory/variants", InventoryVariantViewSet, basename="school-inventory-variant")
+router.register("school/inventory/movements", InventoryStockMovementViewSet, basename="school-inventory-movement")
 router.register("parent/students", ParentStudentViewSet, basename="parent-student")
 router.register("parent/payments", ParentPaymentViewSet, basename="parent-payment")
 router.register("parent/receipts", ParentReceiptViewSet, basename="parent-receipt")
@@ -96,13 +111,21 @@ urlpatterns = [
     path("health/", HealthView.as_view(), name="health"),
     path("health/ready/", ReadinessView.as_view(), name="health-ready"),
     path("auth/token/", LoginTokenObtainPairView.as_view(), name="token-obtain-pair"),
-    path("auth/token/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
+    path("auth/token/refresh/", MTMTokenRefreshView.as_view(), name="token-refresh"),
     path("auth/me/", CurrentUserView.as_view(), name="current-user"),
+    path("auth/change-password/", PasswordChangeView.as_view(), name="change-password"),
+    path("platform/dashboard/", PlatformDashboardView.as_view(), name="platform-dashboard"),
+    path("platform/audit/", PlatformAuditView.as_view(), name="platform-audit"),
+    path("platform/schools/<int:school_id>/administrators/", PlatformSchoolAdministratorsView.as_view(), name="platform-school-administrators"),
+    path("platform/schools/<int:school_id>/administrators/<int:administrator_id>/<str:operation>/", PlatformSchoolAdministratorActionView.as_view(), name="platform-school-administrator-action"),
     path("school/profile/", SchoolProfileView.as_view(), name="school-profile"),
     path("school/search/", SchoolSearchView.as_view(), name="school-search"),
     path("school/available-parents/", AvailableParentView.as_view(), name="school-available-parents"),
     path("school/finance/balances/", SchoolFinanceBalancesView.as_view(), name="school-finance-balances"),
     path("school/finance/cashbook/", SchoolDailyCashbookView.as_view(), name="school-finance-cashbook"),
+    path("school/inventory/summary/", InventorySummaryView.as_view(), name="school-inventory-summary"),
+    path("school/attendance/roster/", AttendanceRosterView.as_view(), name="school-attendance-roster"),
+    path("school/attendance/bulk/", AttendanceBulkView.as_view(), name="school-attendance-bulk"),
     path("school/finance/students/<int:student_id>/", SchoolStudentFinanceView.as_view(), name="school-student-finance"),
     path("school/communication/settings/", SchoolCommunicationSettingsView.as_view(), name="school-communication-settings"),
     path("school/communication/fee-reminders/", SchoolFeeReminderView.as_view(), name="school-fee-reminders"),

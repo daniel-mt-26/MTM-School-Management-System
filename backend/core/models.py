@@ -1,4 +1,5 @@
 from decimal import Decimal
+import uuid
 
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
@@ -18,9 +19,19 @@ class User(AbstractUser):
         PARENT = "parent", "Parent / Guardian"
 
     role = models.CharField(max_length=20, choices=Role.choices)
+    # A password reset increments this value.  JWTs carry it as a claim, so a
+    # reset invalidates both access and refresh tokens already issued to this
+    # user without retaining token material in the database.
+    token_version = models.PositiveIntegerField(default=1)
+    must_change_password = models.BooleanField(default=False)
 
 
 class School(models.Model):
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        SUSPENDED = "suspended", "Suspended"
+        ARCHIVED = "archived", "Archived"
+
     name = models.CharField(max_length=200, unique=True)
     email = models.EmailField(unique=True)
     phone_number = models.CharField(max_length=30)
@@ -28,11 +39,17 @@ class School(models.Model):
     logo = models.ImageField(upload_to="school_logos/", blank=True)
     default_currency = models.CharField(max_length=3, default="USD")
     is_active = models.BooleanField(default=True)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.ACTIVE)
     is_demo = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return self.name
+
+    @property
+    def is_operational(self):
+        """Keep legacy is_active records safely blocked until explicitly reactivated."""
+        return self.is_active and self.status == self.Status.ACTIVE
 
 
 class SchoolAdministrator(models.Model):
@@ -245,6 +262,41 @@ class StudentEnrollment(models.Model):
             raise ValidationError("A student enrollment must remain within the student's school.")
         if self.left_on and self.left_on < self.enrolled_on:
             raise ValidationError({"left_on": "The leaving date cannot be before the enrollment date."})
+
+
+class AttendanceRecord(models.Model):
+    """A school-local daily attendance decision for one enrolled student."""
+
+    class Status(models.TextChoices):
+        PRESENT = "present", "Present"
+        ABSENT = "absent", "Absent"
+        LATE = "late", "Late"
+        EXCUSED = "excused", "Excused"
+
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="attendance_records")
+    enrollment = models.ForeignKey(StudentEnrollment, on_delete=models.PROTECT, related_name="attendance_records")
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name="attendance_records")
+    term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="attendance_records")
+    attendance_date = models.DateField()
+    status = models.CharField(max_length=12, choices=Status.choices)
+    recorded_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="attendance_records")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["enrollment", "term", "attendance_date"], name="unique_attendance_enrollment_term_date")]
+        indexes = [models.Index(fields=["school", "attendance_date"]), models.Index(fields=["term", "attendance_date"])]
+        ordering = ["attendance_date", "enrollment__student__last_name", "enrollment__student__first_name", "id"]
+
+    def clean(self):
+        if self.enrollment.school_class.school_id != self.school_id:
+            raise ValidationError({"enrollment": "The enrollment must belong to this school."})
+        if self.enrollment.academic_year_id != self.academic_year_id:
+            raise ValidationError({"academic_year": "The enrollment must belong to this academic year."})
+        if self.term.academic_year_id != self.academic_year_id:
+            raise ValidationError({"term": "The term must belong to the academic year."})
+        if not self.term.start_date <= self.attendance_date <= self.term.end_date:
+            raise ValidationError({"attendance_date": "Attendance date must fall within the selected term."})
 
 
 class Homework(models.Model):
@@ -474,6 +526,134 @@ class Expense(models.Model):
     def clean(self):
         if self.school_id and self.currency != self.school.default_currency:
             raise ValidationError({"currency": "Expenses must use the school's default currency."})
+
+
+class InventoryCategory(models.Model):
+    """A school-owned grouping for generic inventory items."""
+
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="inventory_categories")
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name", "id"]
+        constraints = [models.UniqueConstraint(fields=["school", "name"], name="unique_inventory_category_per_school")]
+        indexes = [models.Index(fields=["school", "is_active"])]
+
+
+class InventoryItem(models.Model):
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="inventory_items")
+    category = models.ForeignKey(InventoryCategory, on_delete=models.PROTECT, related_name="items")
+    name = models.CharField(max_length=150)
+    code = models.CharField(max_length=80, blank=True)
+    description = models.TextField(blank=True)
+    unit = models.CharField(max_length=40, default="each")
+    minimum_stock_level = models.PositiveIntegerField(default=0)
+    cost_per_unit = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal("0.00"))])
+    storage_location = models.CharField(max_length=150, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["school", "name"], name="unique_inventory_item_per_school"),
+            models.UniqueConstraint(fields=["school", "code"], condition=~Q(code=""), name="unique_inventory_item_code_per_school"),
+        ]
+        indexes = [models.Index(fields=["school", "category", "is_active"])]
+
+    def clean(self):
+        if self.category_id and self.school_id and self.category.school_id != self.school_id:
+            raise ValidationError({"category": "The category must belong to this item’s school."})
+
+
+class InventoryVariant(models.Model):
+    """A lightweight label such as Size 30, Blue, 500ml, or Grade 3."""
+
+    item = models.ForeignKey(InventoryItem, on_delete=models.PROTECT, related_name="variants")
+    name = models.CharField(max_length=100)
+    code = models.CharField(max_length=80, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["item", "name"], name="unique_inventory_variant_per_item"),
+            models.UniqueConstraint(fields=["item", "code"], condition=~Q(code=""), name="unique_inventory_variant_code_per_item"),
+        ]
+        indexes = [models.Index(fields=["item", "is_active"])]
+
+
+class InventoryStockMovement(models.Model):
+    class MovementType(models.TextChoices):
+        RESTOCK = "restock", "Restock"
+        ISSUED = "issued", "Issued"
+        SOLD = "sold", "Sold"
+        DAMAGED = "damaged", "Damaged"
+        ADJUSTMENT = "adjustment", "Adjustment"
+        RETURNED = "returned", "Returned"
+
+    class Direction(models.TextChoices):
+        IN = "in", "In"
+        OUT = "out", "Out"
+
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="inventory_stock_movements")
+    item = models.ForeignKey(InventoryItem, on_delete=models.PROTECT, related_name="stock_movements")
+    variant = models.ForeignKey(InventoryVariant, on_delete=models.PROTECT, related_name="stock_movements", null=True, blank=True)
+    movement_type = models.CharField(max_length=20, choices=MovementType.choices)
+    direction = models.CharField(max_length=3, choices=Direction.choices)
+    quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    unit_cost = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal("0.00"))])
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="inventory_stock_movements")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["school", "created_at"]),
+            models.Index(fields=["item", "variant", "created_at"]),
+        ]
+
+    def clean(self):
+        if self.item_id and self.school_id and self.item.school_id != self.school_id:
+            raise ValidationError({"item": "The item must belong to this movement’s school."})
+        if self.variant_id and self.variant.item_id != self.item_id:
+            raise ValidationError({"variant": "The variant must belong to the selected item."})
+        expected_directions = {
+            self.MovementType.RESTOCK: self.Direction.IN,
+            self.MovementType.RETURNED: self.Direction.IN,
+            self.MovementType.ISSUED: self.Direction.OUT,
+            self.MovementType.SOLD: self.Direction.OUT,
+            self.MovementType.DAMAGED: self.Direction.OUT,
+        }
+        expected = expected_directions.get(self.movement_type)
+        if expected and self.direction != expected:
+            raise ValidationError({"direction": "This movement type has a fixed stock direction."})
+
+
+class IdempotencyRecord(models.Model):
+    """Tenant- and actor-bound replay record for safe queued mutations."""
+
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="idempotency_records")
+    actor = models.ForeignKey(User, on_delete=models.PROTECT, related_name="idempotency_records")
+    operation_id = models.UUIDField(default=uuid.uuid4)
+    request_method = models.CharField(max_length=10)
+    request_path = models.CharField(max_length=255)
+    payload_hash = models.CharField(max_length=64)
+    response_status = models.PositiveSmallIntegerField()
+    response_body = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["school", "actor", "operation_id"], name="unique_idempotency_operation_per_actor_school")]
+        indexes = [models.Index(fields=["school", "actor", "created_at"])]
 
 
 class AcademicResult(models.Model):

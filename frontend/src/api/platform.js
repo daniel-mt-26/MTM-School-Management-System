@@ -1,0 +1,12 @@
+import { apiClient } from './client'
+const json = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+export const platformDashboard = () => apiClient('/platform/dashboard/')
+export const platformAudit = () => apiClient('/platform/audit/')
+export const platformSchools = (q = '') => apiClient(`/platform/schools/${q ? `?q=${encodeURIComponent(q)}` : ''}`)
+export const platformSchool = (id) => apiClient(`/platform/schools/${id}/`)
+export const createPlatformSchool = (data) => apiClient('/platform/schools/', json('POST', data))
+export const updatePlatformSchool = (id, data) => apiClient(`/platform/schools/${id}/`, json('PATCH', data))
+export const schoolAction = (id, action) => apiClient(`/platform/schools/${id}/${action}/`, json('POST', {}))
+export const administrators = (schoolId) => apiClient(`/platform/schools/${schoolId}/administrators/`)
+export const createAdministrator = (schoolId, data) => apiClient(`/platform/schools/${schoolId}/administrators/`, json('POST', data))
+export const administratorAction = (schoolId, id, action) => apiClient(`/platform/schools/${schoolId}/administrators/${id}/${action}/`, json('POST', {}))
