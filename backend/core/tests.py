@@ -1541,6 +1541,22 @@ class PlatformAdministratorTests(APITestCase):
         response = self.client.post("/api/auth/token/", {"username": username, "password": password}, format="json")
         return response
 
+    def test_application_platform_admin_and_school_accounts_can_obtain_tokens(self):
+        self.assertTrue(self.platform.is_active)
+        self.assertFalse(self.platform.is_superuser)
+        self.assertFalse(SchoolAdministrator.objects.filter(user=self.platform).exists())
+        self.assertFalse(Parent.objects.filter(user=self.platform).exists())
+        for username, password in (
+            ("platform", "Platform-pass-123!"),
+            ("school-admin", "School-pass-123!"),
+            ("platform-parent", "Parent-pass-123!"),
+        ):
+            with self.subTest(username=username):
+                response = self.login(username, password)
+                self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+                self.assertIn("access", response.data)
+                self.assertIn("refresh", response.data)
+
     def use_access(self, access):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
 

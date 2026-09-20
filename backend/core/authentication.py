@@ -1,5 +1,8 @@
 """JWT authentication and issuance rules shared by every API endpoint."""
 
+import logging
+
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.authentication import JWTAuthentication
@@ -8,6 +11,8 @@ from rest_framework_simplejwt.settings import api_settings
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import User
+
+logger = logging.getLogger(__name__)
 
 
 def account_failure(user, *, login=False):
@@ -78,8 +83,24 @@ class MTMTokenObtainPairSerializer(TokenObtainPairSerializer):
         return token
 
     def validate(self, attrs):
-        data = super().validate(attrs)
+        try:
+            data = super().validate(attrs)
+        except AuthenticationFailed as exc:
+            if exc.get_codes() == "no_active_account":
+                username = attrs.get(get_user_model().USERNAME_FIELD)
+                user = get_user_model().objects.filter(**{get_user_model().USERNAME_FIELD: username}).values(
+                    "role", "is_active"
+                ).first() if username is not None else None
+                logger.warning(
+                    "Token login credential check denied: account_found=%s role=%s active=%s backends=%s",
+                    user is not None,
+                    user["role"] if user else None,
+                    user["is_active"] if user else None,
+                    settings.AUTHENTICATION_BACKENDS,
+                )
+            raise
         if not user_can_use_mtm(self.user):
+            logger.warning("Token login account policy denied: role=%s active=%s", self.user.role, self.user.is_active)
             raise account_failure(self.user, login=True)
         return data
 
