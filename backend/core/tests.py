@@ -105,7 +105,8 @@ class MediaStorageConfigurationTests(SimpleTestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, {"detail": "Unable to complete this request. Please try again."})
         self.assertIn("RuntimeError", captured.output[0])
-        self.assertIn("location=", captured.output[0])
+        self.assertIn("Traceback (most recent call last):", captured.output[0])
+        self.assertIn("in test_unexpected_api_error_logs_location_without_secret_message", captured.output[0])
         self.assertNotIn("secret-value", captured.output[0])
 
 
@@ -917,6 +918,16 @@ class TenantIsolationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertNotIn("access", response.data)
         self.assertNotIn("refresh", response.data)
+
+    def test_jwt_unexpected_failure_logs_safe_traceback(self):
+        with patch("rest_framework_simplejwt.serializers.TokenObtainPairSerializer.validate", side_effect=RuntimeError("password=secret-value")):
+            with self.assertLogs("core.exceptions", level="ERROR") as captured:
+                response = self.client.post("/api/auth/token/", {"username": "admin-a", "password": "secret-value"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertEqual(response.data, {"detail": "Unable to complete this request. Please try again."})
+        self.assertIn("view=LoginTokenObtainPairView", captured.output[0])
+        self.assertIn("Traceback (most recent call last):", captured.output[0])
+        self.assertNotIn("secret-value", captured.output[0])
 
 
     def test_report_card_files_use_only_protected_tenant_scoped_downloads(self):
