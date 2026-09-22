@@ -1,7 +1,12 @@
-import { apiClient } from './client'
+import { apiClient } from './client.js'
+
+let profileRequest = null
 
 export function getSchoolProfile() {
-  return apiClient('/school/profile/')
+  if (!profileRequest) {
+    profileRequest = apiClient('/school/profile/').finally(() => { profileRequest = null })
+  }
+  return profileRequest
 }
 
 export function searchSchool(query) {
@@ -9,6 +14,7 @@ export function searchSchool(query) {
 }
 
 export function updateSchoolProfile(profile, logo) {
+  profileRequest = null
   if (logo) {
     const formData = new FormData()
     Object.entries(profile).forEach(([key, value]) => formData.append(key, value))

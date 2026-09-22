@@ -8,7 +8,7 @@ import { OfflineContext } from './context'
 async function backendReachable() {
   if (!navigator.onLine) return false
   try {
-    await apiClient('/health/', { headers: { 'Cache-Control': 'no-store' } })
+    await apiClient('/health/', { authenticate: false, cache: 'no-store' })
     return true
   } catch {
     return false
@@ -61,8 +61,7 @@ export function OfflineProvider({ user, children }) {
     window.addEventListener('online', online)
     window.addEventListener('offline', offline)
     void verify()
-    const timer = window.setInterval(verify, 60_000)
-    return () => { active = false; window.removeEventListener('online', online); window.removeEventListener('offline', offline); window.clearInterval(timer) }
+    return () => { active = false; window.removeEventListener('online', online); window.removeEventListener('offline', offline) }
   }, [scope, syncNow])
 
   const value = useMemo(() => ({

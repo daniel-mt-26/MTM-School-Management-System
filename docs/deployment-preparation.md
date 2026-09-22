@@ -1,125 +1,81 @@
-# MTM deployment preparation
+# MTM production deployment preparation
 
-This project is prepared for deployment; it is not deployed by this document.
+MTM SMS uses the Vite/React frontend on Vercel, the Django API on Render, and Supabase for PostgreSQL and private media storage. This document prepares deployment only. It does not deploy, migrate, restore, or provision school data.
 
-## Configuration
+## Repository layout
 
-Set environment values outside Git: `DJANGO_SECRET_KEY`, PostgreSQL connection
-variables, `DJANGO_DEBUG=false`, `DJANGO_ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`,
-`CSRF_TRUSTED_ORIGINS`, and the secure-cookie/HTTPS variables shown in
-`backend/.env.example`. Use a real HTTPS reverse proxy and set
-`SECURE_SSL_REDIRECT`, secure cookies, and HSTS only after TLS is confirmed.
+| Component | Location | Production configuration |
+| --- | --- | --- |
+| React frontend | `frontend/` | Vercel project with Root Directory `frontend/` |
+| Django API | `backend/` | Render Blueprint `render.yaml` |
+| Django settings / WSGI | `backend/config.settings` / `backend/config.wsgi:application` | Gunicorn process |
+| Dependencies | `backend/requirements.txt` | Render build installs them |
+| Database and media | Supabase | PostgreSQL `DATABASE_URL` and private S3 storage |
 
-Serve static/media through suitable production infrastructure. Django's DEBUG
-media serving is development-only. Receipt PDFs remain authenticated API
-responses and must not be made public media links.
+Django exposes `GET /api/health/` and `GET /api/health/ready/`. Render uses the readiness route after the release migration command completes.
 
-## Vercel and Supabase
+## Render dashboard values
 
-Use two Vercel projects from this repository:
+Create a Render Blueprint from this repository using `render.yaml`. It creates the `mtm-sms-api` Python web service with these values:
 
-- Frontend: set the Vercel Root Directory to `frontend/`; configure
-  `VITE_API_BASE_URL` with the deployed Django API URL.
-- Backend: use the repository root so Vercel can discover `api/index.py`, the
-  root `requirements.txt`, `.python-version`, and `vercel.json`. The adapter
-  adds `backend/` to Python's import path and exposes
-  `config.wsgi.application` as the Vercel WSGI `app`.
+| Render field | Value |
+| --- | --- |
+| Root Directory | `backend` |
+| Build Command | `pip install -r requirements.txt && python manage.py collectstatic --noinput` |
+| Pre-deploy Command | `python manage.py migrate --noinput` |
+| Start Command | `gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 3 --timeout 120` |
+| Health Check Path | `/api/health/ready/` |
+| Auto deploy | Disabled until a release is approved |
 
-The frontend already defaults to `http://127.0.0.1:8000/api` locally and reads
-`VITE_API_BASE_URL` in production. Keep Django JWT authentication and the REST
-API as the only browser-facing data layer; Supabase is managed PostgreSQL, not
-a client-side replacement for Django permissions.
+Set the following Render variables. Enter actual values only in Render; `backend/.env.production.example` contains names and safe placeholders only.
 
-Set `DATABASE_URL` to the Supabase PostgreSQL connection string in the backend
-Vercel environment. If it is absent locally, Django continues to use the
-existing `POSTGRES_*` settings. Set production host/origin values through
-`DJANGO_ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, and `CSRF_TRUSTED_ORIGINS`.
+| Variable | Required value format |
+| --- | --- |
+| `DJANGO_ENV` | `production` |
+| `DJANGO_DEBUG` | `false` |
+| `DJANGO_SECRET_KEY` | Render-generated or securely generated secret |
+| `DATABASE_URL` | Supabase **Session Pooler** URI with `sslmode=require` |
+| `DB_CONN_MAX_AGE` | `0` |
+| `DB_SSL_REQUIRE` | `true` |
+| `DJANGO_ALLOWED_HOSTS` | Render hostname, for example `mtm-sms-api.onrender.com` |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated HTTPS Vercel production/custom origins |
+| `CSRF_TRUSTED_ORIGINS` | Comma-separated HTTPS Vercel production/custom origins |
+| `SECURE_SSL_REDIRECT` | `true` |
+| `SESSION_COOKIE_SECURE` | `true` |
+| `CSRF_COOKIE_SECURE` | `true` |
+| `SECURE_HSTS_SECONDS` | `31536000` after HTTPS hostname verification |
+| `SECURE_HSTS_INCLUDE_SUBDOMAINS`, `SECURE_HSTS_PRELOAD` | `false` initially; enable only when their domain commitments are intended |
+| `JWT_ACCESS_MINUTES`, `JWT_REFRESH_DAYS`, `JWT_ROTATE_REFRESH_TOKENS`, `JWT_BLACKLIST_AFTER_ROTATION` | Existing JWT policy values |
+| `MTM_N8N_INTEGRATION_SECRET`, `MTM_OUTBOX_CLAIM_TIMEOUT_SECONDS`, `MTM_OUTBOX_MAX_ATTEMPTS` | Existing n8n/outbox policy |
+| `DJANGO_EMAIL_BACKEND`, `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS`, `DEFAULT_FROM_EMAIL` | Production SMTP values; console email is not email recovery |
+| `MTM_MEDIA_STORAGE` | `supabase` |
+| `SUPABASE_STORAGE_BUCKET`, `SUPABASE_S3_ENDPOINT`, `SUPABASE_S3_REGION`, `SUPABASE_S3_ACCESS_KEY_ID`, `SUPABASE_S3_SECRET_ACCESS_KEY` | Private Supabase S3 storage values |
 
-For Vercel's short-lived functions, select **Transaction pooler** in the
-Supabase project's Connect dialog and copy its full connection string. The
-shared transaction pooler uses port `6543` and a pooler-specific username;
-changing only the port of a direct URL is insufficient. Percent-encode
-reserved characters in the password. Keep `DB_CONN_MAX_AGE=0` (the default)
-and `DB_SSL_REQUIRE=true` in production. Django 6.1 disables psycopg prepared
-statements by default. A successful `/api/health/ready/` response confirms
-only that one invocation could open a connection at that moment; it does not
-guarantee later invocations will connect.
+In production Django fails startup if the database URL, hosts, CORS origins, or CSRF trusted origins are missing; if debug is enabled; or if database SSL is disabled. Render terminates TLS before Django, so the app trusts `X-Forwarded-Proto` and enforces secure redirects and cookies.
 
-WhiteNoise serves collected Django static assets only. Vercel's filesystem is
-not persistent uploaded-media storage. MTM now selects its Django default media
-storage explicitly:
+## Supabase
 
-- `MTM_MEDIA_STORAGE=local` uses `backend/media/` and requires no Supabase
-  credentials. This is the development default.
-- `MTM_MEDIA_STORAGE=supabase` uses `storages.backends.s3.S3Storage` with the
-  private Supabase S3-compatible endpoint. Missing variables or a non-HTTPS
-  endpoint stop startup rather than falling back to ephemeral local files.
+Use the Supabase **Session Pooler** connection string for Render, with TLS required. Select Session Pooler in the Supabase dashboard and preserve its generated host, port, user, database, and `sslmode=require`; do not construct a connection string by changing a direct connection port.
 
-The models that require persistent Django storage are:
+Create a private Supabase Storage bucket before setting `MTM_MEDIA_STORAGE=supabase`. Storage credentials stay in Render only. School logos, homework attachments, and report cards must not be made public.
 
-- `School.logo` (`ImageField`, `school_logos/`)
-- `HomeworkAttachment.file` (`FileField`, `homework/<school>/<homework>/`)
-- `ReportCard.file` (`FileField`, `report_cards/`)
+Before a release that runs migrations, create a custom-format PostgreSQL backup from a secured operator environment and verify the archive can be read. Never restore local `mtm_sms` into Supabase.
 
-Supabase mode uses path-style S3 addressing, Signature Version 4, TLS
-verification, no public ACL, no filename overwrites, and authenticated signed
-URLs that expire after 300 seconds. Homework and Report Card APIs do not return
-raw object URLs; their authenticated Django download actions remain the access
-control boundary. School logos currently use Django's short-lived signed URL so
-the existing `<img>` UI continues working. A separate public branding bucket is
-an optional future refinement, not required for private operational media.
+## Vercel frontend
 
-Local development continues using `MEDIA_ROOT`. The existing
-`purge_expired_homework_attachments` command must remain the only Homework
-retention deletion path: once external storage is configured, its existing
-`attachment.file.delete()` call will delete through Django's configured storage
-backend. Schedule that command separately because a Vercel web function does
-not run persistent background tasks.
+Create one Vercel project with Root Directory `frontend/`. After Render supplies the public API URL, set this Vercel production variable:
 
-Production email is not enabled merely by deploying. Set
-`DJANGO_EMAIL_BACKEND` and the `EMAIL_*` variables for an SMTP service; retain
-the console backend only for development.
-
-### Manual Supabase Storage prerequisite
-
-1. In Supabase Dashboard, create a private bucket such as
-   `mtm-private-media`. Do not make it public.
-2. Open **Storage → S3 Configuration**, enable the S3 protocol if required,
-   and generate a server-side S3 Access Key ID and Secret Access Key.
-3. Record the direct storage endpoint and project region shown by Supabase.
-4. Add these variables to the **backend Vercel project only**:
-
-   ```text
-   MTM_MEDIA_STORAGE=supabase
-   SUPABASE_STORAGE_BUCKET=<private bucket name>
-   SUPABASE_S3_ENDPOINT=<HTTPS S3 endpoint>
-   SUPABASE_S3_REGION=<project region>
-   SUPABASE_S3_ACCESS_KEY_ID=<server-side secret>
-   SUPABASE_S3_SECRET_ACCESS_KEY=<server-side secret>
-   ```
-
-   Never create `VITE_*` copies of the access key or secret.
-
-Django `FileField` and `ImageField` rows store object keys, not file bytes. Any
-existing files under local `backend/media/` whose database values must be kept
-in production require a deliberate one-time upload to matching object keys in
-the Supabase bucket. Do not run that migration automatically and do not upload
-demo media as part of deployment.
-
-## Backups
-
-Run `pg_dump` from a secured operator environment; obtain connection settings
-from environment variables or the managed database service, not a script:
-
-```sh
-pg_dump --format=custom --file=mtm-backup.dump "$DATABASE_URL"
+```text
+VITE_API_BASE_URL=https://<render-public-hostname>/api
 ```
 
-Test restore only against an isolated database:
+The frontend reads `VITE_API_BASE_URL`; do not use `VITE_API_URL`. Never expose Supabase keys, Django secrets, database URLs, SMTP credentials, or n8n secrets as `VITE_*` values. Add the Vercel production URL and each custom frontend domain to Render's `CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS`.
 
-```sh
-pg_restore --clean --if-exists --dbname="$RESTORE_DATABASE_URL" mtm-backup.dump
-```
+## Approved release sequence
 
-Back up private media separately with its access controls. Never run a restore
-against a production database without an approved recovery plan.
+1. Create and verify the Supabase backup.
+2. Confirm Render variables and its HTTPS public URL.
+3. Set Vercel `VITE_API_BASE_URL` to the Render URL plus `/api`.
+4. Deploy the approved commit; Render runs migrations before starting Gunicorn.
+5. Verify actual HTTPS health and CORS responses from the Vercel origin, then test login, `/auth/me/`, and tenant isolation.
+6. Provision a school only after separate approval. Infrastructure deployment must not import local data or create learner or financial records.

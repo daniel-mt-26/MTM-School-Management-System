@@ -12,6 +12,7 @@ dist/
 # Environment variables
 .env
 /backend/.env
+/backend/.local-provisioning/
 
 # VS Code
 .vscode/
