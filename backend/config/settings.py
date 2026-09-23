@@ -26,8 +26,12 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
     raise RuntimeError("DJANGO_SECRET_KEY must be configured in the environment.")
 
-DEBUG = env_bool("DJANGO_DEBUG", True)
-ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
+DJANGO_ENV = os.getenv("DJANGO_ENV", "development").strip().lower()
+if DJANGO_ENV not in {"development", "production"}:
+    raise RuntimeError("DJANGO_ENV must be development or production.")
+IS_PRODUCTION = DJANGO_ENV == "production"
+DEBUG = env_bool("DJANGO_DEBUG", not IS_PRODUCTION)
+ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "" if IS_PRODUCTION else "localhost,127.0.0.1")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -79,7 +83,7 @@ REST_FRAMEWORK = {
     "EXCEPTION_HANDLER": "core.exceptions.api_exception_handler",
 }
 SIMPLE_JWT = {"ACCESS_TOKEN_LIFETIME": timedelta(minutes=int(os.getenv("JWT_ACCESS_MINUTES", "15"))), "REFRESH_TOKEN_LIFETIME": timedelta(days=int(os.getenv("JWT_REFRESH_DAYS", "7"))), "ROTATE_REFRESH_TOKENS": env_bool("JWT_ROTATE_REFRESH_TOKENS", False), "BLACKLIST_AFTER_ROTATION": env_bool("JWT_BLACKLIST_AFTER_ROTATION", False), "UPDATE_LAST_LOGIN": True}
-CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", "http://localhost:5173")
+CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS")
 AUTH_PASSWORD_VALIDATORS = [{"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"}, {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"}, {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"}, {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"}]
 
@@ -107,6 +111,8 @@ if MAILER_BACKEND == "django.core.mail.backends.smtp.EmailBackend":
         "password": os.getenv("EMAIL_HOST_PASSWORD", ""),
         "use_tls": env_bool("EMAIL_USE_TLS", True),
     }
+if IS_PRODUCTION and MAILER_BACKEND == "django.core.mail.backends.console.EmailBackend":
+    raise RuntimeError("DJANGO_EMAIL_BACKEND must not use the console backend in production.")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", os.getenv("EMAIL_HOST_USER", "") or "webmaster@localhost")
 
 # n8n uses this server-to-server credential; it is never sent to React or
@@ -116,12 +122,33 @@ MTM_OUTBOX_CLAIM_TIMEOUT_SECONDS = int(os.getenv("MTM_OUTBOX_CLAIM_TIMEOUT_SECON
 MTM_OUTBOX_MAX_ATTEMPTS = int(os.getenv("MTM_OUTBOX_MAX_ATTEMPTS", "5"))
 MTM_APP_VERSION = os.getenv("MTM_APP_VERSION", "5.8")
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", False)
-SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", False)
-CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", False)
-SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "0"))
+SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", IS_PRODUCTION)
+SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", IS_PRODUCTION)
+CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", IS_PRODUCTION)
+SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "31536000" if IS_PRODUCTION else "0"))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", False)
 SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", False)
+
+if IS_PRODUCTION:
+    required_production_settings = {
+        "DATABASE_URL": DATABASE_URL,
+        "DJANGO_ALLOWED_HOSTS": ALLOWED_HOSTS,
+        "CORS_ALLOWED_ORIGINS": CORS_ALLOWED_ORIGINS,
+        "CSRF_TRUSTED_ORIGINS": CSRF_TRUSTED_ORIGINS,
+    }
+    missing = [name for name, value in required_production_settings.items() if not value]
+    if missing:
+        raise RuntimeError("Missing required production settings: " + ", ".join(missing))
+    if DEBUG:
+        raise RuntimeError("DJANGO_DEBUG must be false in production.")
+    if not env_bool("DB_SSL_REQUIRE", True):
+        raise RuntimeError("DB_SSL_REQUIRE must be true in production.")
+    if os.getenv("MTM_MEDIA_STORAGE", "").strip().lower() != "supabase":
+        raise RuntimeError("MTM_MEDIA_STORAGE must be supabase in production.")
+    if not (SECURE_SSL_REDIRECT and SESSION_COOKIE_SECURE and CSRF_COOKIE_SECURE):
+        raise RuntimeError("HTTPS redirects and secure cookies must be enabled in production.")
+    if SECURE_HSTS_SECONDS <= 0:
+        raise RuntimeError("SECURE_HSTS_SECONDS must be positive in production.")
 
 LOGGING = {
     "version": 1,

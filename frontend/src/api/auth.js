@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000/api'
+const API_BASE_URL = import.meta.env?.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000/api'
 
 export const tokenStorage = {
   getAccess: () => sessionStorage.getItem('mtm_access_token'),
@@ -51,11 +51,5 @@ export function refreshAccessToken(refresh) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refresh }),
-  })
-}
-
-export function getCurrentUser(accessToken) {
-  return request('/auth/me/', {
-    headers: { Authorization: `Bearer ${accessToken}` },
   })
 }

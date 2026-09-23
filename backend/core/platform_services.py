@@ -28,17 +28,20 @@ def validate_new_password(password, user):
 
 
 @transaction.atomic
-def provision_school(*, school_data, admin_data):
+def provision_school(*, school_data, admin_data, password=None):
     """Create a school and exactly one linked administrator as one unit."""
-    school = School.objects.create(**school_data, status=School.Status.ACTIVE, is_active=True)
+    school = School(**school_data, status=School.Status.ACTIVE, is_active=True)
     user = User(
         username=admin_data["username"], email=admin_data.get("email", ""),
         first_name=admin_data.get("first_name", ""), last_name=admin_data.get("last_name", ""),
         role=User.Role.SCHOOL_ADMIN, must_change_password=True,
     )
-    temporary_password = generate_temporary_password()
+    temporary_password = generate_temporary_password() if password is None else password
+    validate_new_password(temporary_password, user)
     user.set_password(temporary_password)
+    school.full_clean()
     user.full_clean()
+    school.save()
     user.save()
     administrator = SchoolAdministrator(user=user, school=school)
     administrator.full_clean()

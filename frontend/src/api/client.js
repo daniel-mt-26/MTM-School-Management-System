@@ -1,6 +1,6 @@
-import { refreshAccessToken, tokenStorage } from './auth'
+import { refreshAccessToken, tokenStorage } from './auth.js'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000/api'
+const API_BASE_URL = import.meta.env?.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000/api'
 
 let refreshPromise = null
 let onAuthenticationFailure = () => {}
@@ -29,13 +29,14 @@ async function refreshOnce() {
 }
 
 export async function apiClient(path, options = {}, retried = false) {
-  const headers = new Headers(options.headers)
+  const { authenticate = true, ...fetchOptions } = options
+  const headers = new Headers(fetchOptions.headers)
   const access = tokenStorage.getAccess()
-  if (access) headers.set('Authorization', `Bearer ${access}`)
+  if (authenticate && access) headers.set('Authorization', `Bearer ${access}`)
 
   let response
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers })
+    response = await fetch(`${API_BASE_URL}${path}`, { ...fetchOptions, headers })
   } catch {
     const error = new Error('Network error')
     error.code = 'network_error'
@@ -51,7 +52,7 @@ export async function apiClient(path, options = {}, retried = false) {
     throw error
   }
 
-  if (response.status === 401 && !retried && !path.startsWith('/auth/token/')) {
+  if (authenticate && response.status === 401 && !retried && !path.startsWith('/auth/token/')) {
     try {
       await refreshOnce()
       return apiClient(path, options, true)
@@ -62,6 +63,14 @@ export async function apiClient(path, options = {}, retried = false) {
       error.code = 'session_expired'
       throw error
     }
+  }
+
+  if (authenticate && response.status === 401 && retried) {
+    tokenStorage.clear()
+    onAuthenticationFailure()
+    const error = new Error('Session expired')
+    error.code = 'session_expired'
+    throw error
   }
 
   if (!response.ok) {
