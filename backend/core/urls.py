@@ -1,3 +1,4 @@
+from .academics_api import TimetableViewSet
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from .views import (
@@ -93,6 +94,7 @@ router.register("school/communication/announcements", AnnouncementViewSet, basen
 router.register("school/communication/history", CommunicationMessageViewSet, basename="school-communication-history")
 router.register("school/audit", AuditLogViewSet, basename="school-audit")
 router.register("school/parent-links", SchoolParentStudentViewSet, basename="school-parent-link")
+router.register("school/timetable-plans", TimetableViewSet, basename="school-timetable-plan")
 router.register("school/timetables", TimetableEntryViewSet, basename="school-timetable")
 router.register("school/homework", HomeworkViewSet, basename="school-homework")
 router.register("school/inventory/categories", InventoryCategoryViewSet, basename="school-inventory-category")

@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.db import connection
-from django.db.models import Case, Exists, F, IntegerField, OuterRef, Prefetch, Q, Sum, Value, When
+from django.db.models import Case, Count, Exists, F, IntegerField, OuterRef, Prefetch, Q, Sum, Value, When
 from django.db.models.functions import Coalesce
 from django.http import FileResponse, Http404
 from django.http import HttpResponse
@@ -765,11 +765,42 @@ class TimetableEntryViewSet(SchoolAdminViewSet):
     serializer_class = TimetableEntrySerializer
     school_lookup = "school_class__school"
 
+    def perform_create(self, serializer):
+        from .models import Timetable
+        entry = serializer.save()
+        # Legacy clients still post individual periods. Put those periods into
+        # a single-class definition so they remain visible in the new workflow.
+        plan = Timetable.objects.filter(school=self.get_school(), academic_year=entry.academic_year, term=entry.term).annotate(class_count=Count('classes')).filter(class_count=1, classes=entry.school_class).first()
+        if plan is None:
+            plan = Timetable.objects.create(school=self.get_school(), name=f'{entry.school_class.name} timetable', academic_year=entry.academic_year, term=entry.term)
+            plan.classes.add(entry.school_class)
+        entry.timetable = plan
+        entry.save(update_fields=['timetable'])
+
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        School.objects.select_for_update().get(pk=self.get_school().pk)
+        return super().create(request, *args, **kwargs)
+
+    @transaction.atomic
+    def update(self, request, *args, **kwargs):
+        School.objects.select_for_update().get(pk=self.get_school().pk)
+        if self.get_object().timetable_id:
+            raise ValidationError('Edit shared timetable entries through the timetable definition.')
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if self.get_object().timetable_id:
+            raise ValidationError('Remove shared entries through the timetable definition.')
+        return super().destroy(request, *args, **kwargs)
+
     def get_queryset(self):
         queryset = super().get_queryset().select_related("school_class", "academic_year", "term", "subject")
-        for name in ("school_class", "academic_year", "term"):
+        for name in ("academic_year", "term"):
             if value := self.request.query_params.get(name):
                 queryset = queryset.filter(**{f"{name}_id": value})
+        if value := self.request.query_params.get('school_class'):
+            queryset = queryset.filter(Q(timetable__classes__id=value) | Q(timetable__isnull=True, school_class_id=value)).distinct()
         return queryset.order_by("day_of_week", "start_time", "end_time", "id")
 
 
@@ -782,7 +813,7 @@ class ParentStudentTimetableView(APIView):
             pk=student_id,
             parent_links__parent=request.user.parent_profile,
         )
-        entries = TimetableEntry.objects.filter(school_class=student.school_class)
+        entries = TimetableEntry.objects.filter(Q(timetable__classes=student.school_class) | Q(timetable__isnull=True, school_class=student.school_class)).distinct()
         if year := request.query_params.get("academic_year"):
             entries = entries.filter(academic_year_id=year)
         if term := request.query_params.get("term"):
@@ -819,11 +850,43 @@ class SubjectViewSet(SchoolAdminViewSet):
     serializer_class = SubjectSerializer
     school_lookup = "school"
 
+    @action(detail=False, methods=['get'])
+    def library(self, request):
+        from .curriculum import library
+        return Response(library())
+
+    @action(detail=False, methods=['post'])
+    @transaction.atomic
+    def activate(self, request):
+        from .curriculum import SUBJECTS
+        if 'school' in request.data or 'school_id' in request.data:
+            raise ValidationError('School ownership is controlled by the authenticated account.')
+        keys = request.data.get('keys')
+        if not isinstance(keys, list) or not keys or any(not isinstance(key, str) or key not in SUBJECTS for key in keys):
+            raise ValidationError({'keys': 'Select valid built-in subject keys.'})
+        school = self.get_school()
+        School.objects.select_for_update().get(pk=school.pk)
+        subjects = []
+        for key in dict.fromkeys(keys):
+            name = SUBJECTS[key]
+            subject = Subject.objects.filter(school=school, name__iexact=name).first()
+            if subject is None:
+                if Subject.objects.filter(school=school, code=key).exists():
+                    raise ValidationError('A custom subject already uses this reference code. Rename its code before activation.')
+                subject = Subject.objects.create(school=school, name=name, code=key)
+            elif not subject.is_active:
+                subject.is_active = True
+                subject.save(update_fields=['is_active'])
+            subjects.append(subject)
+        return Response(self.get_serializer(subjects, many=True).data)
+
     def perform_create(self, serializer):
         serializer.save(school=self.get_school())
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if self.request.query_params.get('active') == 'true':
+            queryset = queryset.filter(is_active=True)
         if query := self.request.query_params.get("q", "").strip():
             queryset = queryset.filter(Q(name__icontains=query) | Q(code__icontains=query))
         return queryset.order_by("name", "id")
@@ -877,10 +940,9 @@ class FeeViewSet(SchoolAdminViewSet):
         return queryset.order_by("-academic_year__start_date", "name", "id")
 
     def destroy(self, request, *args, **kwargs):
-        fee = self.get_object()
-        if fee.student_assignments.exists():
-            raise ValidationError({"detail": "Fees with assignments are preserved as financial history."})
-        return super().destroy(request, *args, **kwargs)
+        from .fee_deletion import delete_unused_fee
+        delete_unused_fee(record=self.get_object(), school=self.get_school(), actor=request.user)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ExpenseViewSet(SchoolAdminViewSet):
@@ -1194,6 +1256,10 @@ class StudentFeeAssignmentViewSet(SchoolAdminViewSet):
     serializer_class = StudentFeeAssignmentSerializer
     school_lookup = "student__school_class__school"
 
+    def update(self, request, *args, **kwargs):
+        self.get_object()
+        raise ValidationError("Charges are preserved financial records and cannot be rewritten.")
+
     def get_queryset(self):
         queryset = super().get_queryset().select_related("student__school_class", "fee")
         for name in ("student", "fee"):
@@ -1343,6 +1409,28 @@ class RecurringFeeTemplateViewSet(SchoolAdminViewSet):
     serializer_class = RecurringFeeTemplateSerializer
     school_lookup = "school"
 
+    @transaction.atomic
+    def update(self, request, *args, **kwargs):
+        self.get_queryset().select_for_update().get(pk=self.get_object().pk)
+        return super().update(request, *args, **kwargs)
+
+    @action(detail=True, methods=["get"])
+    def preview(self, request, pk=None):
+        from .finance import fee_plan
+        return Response(fee_plan(self.get_object())[0])
+
+    @action(detail=True, methods=["post"], url_path="generate-charges")
+    def generate_charges(self, request, pk=None):
+        from .finance import generate_fee_structure
+        if request.data.get("confirm") is not True:
+            raise ValidationError({"confirm": "Explicit confirmation is required."})
+        return Response(generate_fee_structure(template=self.get_object(), preview_token=request.data.get("preview_token")))
+
+    def destroy(self, request, *args, **kwargs):
+        from .fee_deletion import delete_unused_fee
+        delete_unused_fee(record=self.get_object(), school=self.get_school(), actor=request.user)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
     def perform_create(self, serializer):
         serializer.save(school=self.get_school(), currency=serializer.validated_data.get("currency", self.get_school().default_currency))
 
@@ -1355,7 +1443,10 @@ class RecurringFeeTemplateViewSet(SchoolAdminViewSet):
         value = parse_date(month)
         if not value:
             raise ValidationError({"month": "Use a valid date."})
-        return Response(generate_recurring_charges(school=self.get_school(), for_month=value))
+        if request.data.get("preview"):
+            from .finance import recurring_preview
+            return Response(recurring_preview(school=self.get_school(), for_month=value))
+        return Response(generate_recurring_charges(school=self.get_school(), for_month=value, preview_token=request.data.get("preview_token")))
 
 
 def finance_summary(student):

@@ -605,18 +605,12 @@ class TimetableEntrySerializer(SchoolScopedSerializerMixin, serializers.ModelSer
             candidate.clean()
         except DjangoValidationError as exc:
             raise serializers.ValidationError(getattr(exc, "message_dict", {"non_field_errors": exc.messages})) from exc
-        overlaps = TimetableEntry.objects.filter(
-            school_class=candidate.school_class,
-            academic_year=candidate.academic_year,
-            term=candidate.term,
-            day_of_week=candidate.day_of_week,
-            start_time__lt=candidate.end_time,
-            end_time__gt=candidate.start_time,
-        )
-        if self.instance:
-            overlaps = overlaps.exclude(pk=self.instance.pk)
-        if overlaps.exists():
-            raise serializers.ValidationError({"start_time": "This period overlaps an existing timetable entry."})
+        from .timetables import conflicts
+        if candidate.subject_id and not candidate.subject.is_active:
+            raise serializers.ValidationError({"subject": "Choose an active subject."})
+        conflicts(classes=[candidate.school_class], year=candidate.academic_year, term=candidate.term,
+                  entry={"day_of_week": candidate.day_of_week, "start_time": candidate.start_time, "end_time": candidate.end_time},
+                  exclude_entry=self.instance.pk if self.instance else None)
         return attrs
 
     class Meta:
@@ -649,6 +643,12 @@ class AcademicYearSerializer(SchoolScopedSerializerMixin, serializers.ModelSeria
 class TermSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
     scoped_related_fields = {"academic_year": (AcademicYear, "school")}
     academic_year_name = serializers.CharField(source="academic_year.name", read_only=True)
+    billable_months = serializers.SerializerMethodField()
+
+    def get_billable_months(self, term):
+        from types import SimpleNamespace
+        from .finance import billing_periods
+        return len(billing_periods(SimpleNamespace(term=term, billing_method="MONTHLY")))
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
@@ -660,7 +660,7 @@ class TermSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
 
     class Meta:
         model = Term
-        fields = ["id", "academic_year", "academic_year_name", "name", "sequence", "start_date", "end_date"]
+        fields = ["id", "academic_year", "academic_year_name", "name", "sequence", "start_date", "end_date", "billable_months"]
         read_only_fields = ["id"]
 
 
@@ -728,6 +728,12 @@ class AttendanceBulkSerializer(serializers.Serializer):
 
 
 class FeeSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    can_delete = serializers.SerializerMethodField()
+
+    def get_can_delete(self, fee):
+        from .fee_deletion import can_delete_fee
+        return can_delete_fee(fee)
+
     scoped_related_fields = {
         "academic_year": (AcademicYear, "school"),
         "term": (Term, "academic_year__school"),
@@ -745,6 +751,9 @@ class FeeSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
         if currency != self.get_school().default_currency:
             raise serializers.ValidationError({"currency": "This school supports its default currency only."})
         candidate = copy(self.instance) if self.instance is not None else Fee(school=self.get_school())
+        if self.instance and (self.instance.recurring_template_id or self.instance.student_assignments.exists()):
+            if any(key != "is_active" and getattr(self.instance, key) != value for key, value in attrs.items()):
+                raise serializers.ValidationError("Fees with financial history may only be activated or deactivated.")
         for field_name, value in attrs.items():
             setattr(candidate, field_name, value)
         try:
@@ -755,11 +764,13 @@ class FeeSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
 
     class Meta:
         model = Fee
-        fields = ["id", "academic_year", "academic_year_name", "term", "term_name", "school_class", "class_name", "name", "amount", "currency", "due_date", "is_active"]
+        fields = ["id", "academic_year", "academic_year_name", "term", "term_name", "school_class", "class_name", "name", "amount", "currency", "due_date", "is_active", "can_delete"]
         read_only_fields = ["id"]
 
 
 class StudentFeeAssignmentSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    academic_year_name = serializers.CharField(source="fee.academic_year.name", read_only=True)
+    term_name = serializers.CharField(source="fee.term.name", read_only=True)
     scoped_related_fields = {
         "student": (Student, "school_class__school"),
         "fee": (Fee, "school"),
@@ -779,11 +790,12 @@ class StudentFeeAssignmentSerializer(SchoolScopedSerializerMixin, serializers.Mo
 
     class Meta:
         model = StudentFeeAssignment
-        fields = ["id", "student", "student_name", "admission_number", "class_name", "fee", "fee_name", "amount_owed", "currency", "assigned_on"]
+        fields = ["id", "student", "student_name", "admission_number", "class_name", "fee", "fee_name", "academic_year_name", "term_name", "amount_owed", "currency", "assigned_on"]
         read_only_fields = ["id"]
 
 
 class PaymentSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    receipt_number = serializers.CharField(required=False, allow_blank=True, max_length=50, write_only=True)
     scoped_related_fields = {"student_fee_assignment": (StudentFeeAssignment, "student__school_class__school")}
     student_name = serializers.SerializerMethodField()
     admission_number = serializers.CharField(source="student_fee_assignment.student.admission_number", read_only=True)
@@ -800,15 +812,18 @@ class PaymentSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer
         return payment.student_fee_assignment.amount_owed - paid + payment.amount
 
     def validate(self, attrs):
+        receipt_number = attrs.pop("receipt_number", "")
         if "recorded_by" in self.initial_data:
             raise serializers.ValidationError({"recorded_by": "The recording administrator is set by the server."})
         if "school" in self.initial_data or "school_id" in self.initial_data:
             raise serializers.ValidationError({"school": "School ownership is controlled by the authenticated account."})
-        return super().validate(attrs)
+        attrs = super().validate(attrs)
+        attrs["receipt_number"] = receipt_number
+        return attrs
 
     class Meta:
         model = Payment
-        fields = ["id", "student_fee_assignment", "student_name", "admission_number", "fee_name", "amount", "currency", "paid_at", "method", "reference", "notes", "recorded_by", "created_at", "is_reversed", "reversed_at", "reversal_reason", "outstanding_before"]
+        fields = ["id", "student_fee_assignment", "student_name", "admission_number", "fee_name", "amount", "currency", "paid_at", "method", "reference", "notes", "receipt_number", "recorded_by", "created_at", "is_reversed", "reversed_at", "reversal_reason", "outstanding_before"]
         read_only_fields = ["id", "currency", "recorded_by", "created_at", "is_reversed", "reversed_at", "reversal_reason", "outstanding_before"]
 
 
@@ -859,13 +874,49 @@ class ReceiptSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer
 
 
 class RecurringFeeTemplateSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
-    scoped_related_fields = {"academic_year": (AcademicYear, "school"), "term": (Term, "academic_year__school"), "school_class": (SchoolClass, "school")}
+    can_delete = serializers.SerializerMethodField()
+
+    def get_can_delete(self, template):
+        from .fee_deletion import can_delete_template
+        return can_delete_template(template)
+
+    scoped_related_fields = {"academic_year": (AcademicYear, "school"), "term": (Term, "academic_year__school"), "school_class": (SchoolClass, "school"), "student": (Student, "school")}
     class_name = serializers.CharField(source="school_class.name", read_only=True)
+
+    def validate(self, attrs):
+        if "school" in self.initial_data or "school_id" in self.initial_data:
+            raise serializers.ValidationError({"school": "School ownership is controlled by the authenticated account."})
+        candidate = copy(self.instance) if self.instance else RecurringFeeTemplate(school=self.get_school())
+        for key, value in attrs.items():
+            setattr(candidate, key, value)
+        if not candidate.currency:
+            candidate.currency = self.get_school().default_currency
+            attrs["currency"] = candidate.currency
+        used = self.instance and self.instance.generated_fees.exists()
+        if candidate.billing_method != "LEGACY" and not used:
+            for field, expected in (("start_month", candidate.term.start_date), ("end_month", candidate.term.end_date)):
+                if field in self.initial_data and attrs.get(field) != expected:
+                    raise serializers.ValidationError({field: "Billing dates are derived from the selected term."})
+            candidate.start_month = candidate.term.start_date
+            candidate.end_month = candidate.term.end_date
+            attrs.update(start_month=candidate.start_month, end_month=candidate.end_month)
+        if used:
+            for key, value in attrs.items():
+                if key != "is_active" and getattr(self.instance, key) != value:
+                    raise serializers.ValidationError("Used fee structures may only be activated or deactivated. Create a new structure for changed terms or amounts.")
+        if not candidate.start_month:
+            raise serializers.ValidationError({"start_month": "Legacy templates require a start month."})
+        try:
+            candidate.clean()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(getattr(exc, "message_dict", {"non_field_errors": exc.messages})) from exc
+        return attrs
 
     class Meta:
         model = RecurringFeeTemplate
-        fields = ["id", "academic_year", "term", "school_class", "class_name", "name", "amount", "currency", "start_month", "end_month", "is_active"]
+        fields = ["id", "academic_year", "term", "school_class", "class_name", "student", "billing_method", "name", "amount", "currency", "start_month", "end_month", "is_active", "created_at", "updated_at", "can_delete"]
         read_only_fields = ["id"]
+        extra_kwargs = {"start_month": {"required": False}, "currency": {"required": False}}
 
 
 class ExpenseSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):

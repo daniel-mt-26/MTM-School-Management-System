@@ -194,7 +194,16 @@ class ClassSubject(models.Model):
             raise ValidationError("Class, subject, and academic year must belong to the same school.")
 
 
+class Timetable(models.Model):
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="timetables")
+    name = models.CharField(max_length=150)
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name="timetables")
+    term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="timetables")
+    classes = models.ManyToManyField(SchoolClass, related_name="timetables")
+
+
 class TimetableEntry(models.Model):
+    timetable = models.ForeignKey(Timetable, on_delete=models.PROTECT, related_name="entries", null=True, blank=True)
     school_class = models.ForeignKey(SchoolClass, on_delete=models.PROTECT, related_name="timetable_entries")
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name="timetable_entries")
     term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="timetable_entries")
@@ -209,6 +218,7 @@ class TimetableEntry(models.Model):
             models.UniqueConstraint(
                 fields=["school_class", "academic_year", "term", "day_of_week", "start_time", "end_time"],
                 name="unique_timetable_class_period",
+                deferrable=models.Deferrable.DEFERRED,
             ),
         ]
         indexes = [models.Index(fields=["school_class", "academic_year", "term", "day_of_week"], name="timetable_class_period_idx")]
@@ -385,10 +395,11 @@ class Fee(models.Model):
     is_active = models.BooleanField(default=True)
     recurring_template = models.ForeignKey("RecurringFeeTemplate", on_delete=models.PROTECT, related_name="generated_fees", null=True, blank=True)
     charge_month = models.DateField(null=True, blank=True)
+    period_sequence = models.PositiveSmallIntegerField(null=True, blank=True)
 
     class Meta:
         indexes = [models.Index(fields=["school", "academic_year", "term"])]
-        constraints = [models.UniqueConstraint(fields=["recurring_template", "charge_month"], condition=Q(recurring_template__isnull=False), name="unique_recurring_fee_month")]
+        constraints = [models.UniqueConstraint(fields=["recurring_template", "charge_month"], condition=Q(recurring_template__isnull=False), name="unique_recurring_fee_month"), models.UniqueConstraint(fields=["recurring_template", "period_sequence"], condition=Q(period_sequence__isnull=False), name="unique_fee_structure_period")]
 
     def clean(self):
         if self.academic_year.school_id != self.school_id or self.term.academic_year_id != self.academic_year_id:
@@ -470,6 +481,10 @@ class Receipt(models.Model):
 
 
 class RecurringFeeTemplate(models.Model):
+    billing_method = models.CharField(max_length=10, choices=[("LEGACY", "Legacy monthly"), ("MONTHLY", "Monthly"), ("TERMLY", "Termly"), ("ONE_OFF", "One-off")], default="LEGACY")
+    student = models.ForeignKey(Student, on_delete=models.PROTECT, null=True, blank=True, related_name="fee_structures")
+    created_at = models.DateTimeField(auto_now_add=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True)
     school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="recurring_fee_templates")
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name="recurring_fee_templates")
     term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="recurring_fee_templates")
@@ -483,7 +498,11 @@ class RecurringFeeTemplate(models.Model):
 
     def clean(self):
         if self.academic_year.school_id != self.school_id or self.term.academic_year_id != self.academic_year_id:
-            raise ValidationError("Recurring fee template must use the school's academic year and term.")
+            raise ValidationError("Academic year must belong to this school and term must belong to the selected year.")
+        if self.student_id and (self.student.school_id != self.school_id or self.school_class_id):
+            raise ValidationError({"student": "Select a learner from this school or a class scope, not both."})
+        if self.term.end_date <= self.term.start_date:
+            raise ValidationError({"term": "Term end must follow its start."})
         if self.school_class_id and self.school_class.school_id != self.school_id:
             raise ValidationError({"school_class": "The class must belong to this school."})
         if self.currency != self.school.default_currency:

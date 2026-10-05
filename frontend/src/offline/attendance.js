@@ -2,6 +2,20 @@ import { cacheValue, cachedValue, enqueueOperation, queuedOperations, syncMetada
 
 const rosterKey = (context) => `attendance:roster:${context.school_class}:${context.academic_year}:${context.term}:${context.attendance_date}`
 
+export const cacheAttendanceLookups = (scope, lookups) => cacheValue(scope, 'attendance:lookups', lookups)
+export async function cachedAttendanceLookups(scope) {
+  const cached = await cachedValue(scope, 'attendance:lookups')
+  if (cached) return cached
+  const contexts = (await syncMetadata(scope)).attendanceContexts || []
+  if (!contexts.length) return null
+  const unique = (items) => [...new Map(items.map((item) => [item.id, item])).values()]
+  return {
+    classes: unique(contexts.map((x) => ({ id: x.school_class, name: x.class_name, is_active: true }))),
+    years: unique(contexts.map((x) => ({ id: x.academic_year, name: x.academic_year_name }))),
+    terms: unique(contexts.map((x) => ({ id: x.term, name: x.term_name, academic_year: x.academic_year }))),
+  }
+}
+
 export async function cacheAttendanceRoster(scope, roster) {
   const value = { ...roster, cachedAt: new Date().toISOString() }
   await cacheValue(scope, rosterKey(value), value)

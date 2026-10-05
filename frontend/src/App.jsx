@@ -1,3 +1,5 @@
+import TimetablesPage from './pages/TimetablesPage'
+import CurriculumPage from './pages/CurriculumPage'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider } from './auth/AuthContext'
 import ProtectedRoute from './auth/ProtectedRoute'
@@ -23,6 +25,7 @@ import SchoolSettingsPage from './pages/SchoolSettingsPage'
 import StudentsPage from './pages/StudentsPage'
 import StudentDetailPage from './pages/StudentDetailPage'
 import StudentFormPage from './pages/StudentFormPage'
+import FeeManagementPage from './pages/FeeManagementPage'
 import FinanceRecordsPage from './pages/FinanceRecordsPage'
 import StudentFinancePage from './pages/StudentFinancePage'
 import HomeworkPage from './pages/HomeworkPage'
@@ -62,8 +65,11 @@ function App() {
             <Route path="/school/parents/:parentId/edit" element={<ParentFormPage />} />
             <Route path="/school/academics" element={<AcademicsPage />} />
             <Route path="/school/academics/homework" element={<HomeworkPage />} />
+            <Route path="/school/academics/timetables" element={<TimetablesPage />} />
+            <Route path="/school/academics/curriculum" element={<CurriculumPage />} />
             <Route path="/school/academics/:resource" element={<AcademicRecordsPage />} />
             <Route path="/school/finance" element={<FinancePage />} />
+            <Route path="/school/finance/fee-management" element={<FeeManagementPage />} />
             <Route path="/school/finance/:resource" element={<FinanceRecordsPage />} />
             <Route path="/school/finance/students/:studentId" element={<StudentFinancePage />} />
             <Route path="/school/inventory" element={<InventoryPage />} />
