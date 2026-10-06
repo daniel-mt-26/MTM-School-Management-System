@@ -1,3 +1,4 @@
+from .reporting_api import AttendanceHistoryView, SchoolAccountStatementView, ParentAccountStatementView
 from .academics_api import TimetableViewSet
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
@@ -110,6 +111,9 @@ router.register("parent/notifications", ParentNotificationViewSet, basename="par
 router.register("parent/homework", ParentHomeworkViewSet, basename="parent-homework")
 
 urlpatterns = [
+    path("school/attendance/history/", AttendanceHistoryView.as_view()),
+    path("school/finance/students/<int:student_id>/statement/", SchoolAccountStatementView.as_view()),
+    path("parent/students/<int:student_id>/statement/", ParentAccountStatementView.as_view()),
     path("health/", HealthView.as_view(), name="health"),
     path("health/ready/", ReadinessView.as_view(), name="health-ready"),
     path("auth/token/", LoginTokenObtainPairView.as_view(), name="token-obtain-pair"),

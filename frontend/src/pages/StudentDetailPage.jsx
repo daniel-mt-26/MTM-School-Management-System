@@ -80,7 +80,7 @@ function StudentDetailPage() {
         ))}</div>}
       </section>
 
-      <section className="profile-section"><h2>Finance</h2><Link to={`/school/finance/students/${student.id}`} className="primary-link">View Finance</Link></section>
+      <section className="profile-section"><h2>Finance</h2><Link to={`/school/finance/students/${student.id}/statement`} className="primary-link">Account Statement</Link> <Link to={`/school/finance/students/${student.id}`} className="primary-link">View Finance</Link></section>
 
       <section className="profile-section"><h2>Parents or Guardians</h2>
         {student.parents.length === 0 ? <p className="muted-copy">No parents or guardians are linked.</p> : <div className="parent-link-list">{student.parents.map((link) => (

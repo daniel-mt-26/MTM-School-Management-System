@@ -3,12 +3,13 @@ from django.db import transaction
 from django.db.models import Q
 from rest_framework.exceptions import ValidationError
 
-from .models import ClassSubject, School, Timetable, TimetableEntry
+from .models import ClassSubject, School, SchoolClass, Timetable, TimetableEntry
 
 
 def conflicts(*, classes, year, term, entry, exclude_timetable=None, exclude_entry=None):
+    whole_school = Q(timetable__scope="WHOLE_SCHOOL", timetable__school=year.school) if any(c.is_active for c in classes) else Q(pk__in=[])
     rows = TimetableEntry.objects.filter(
-        Q(timetable__classes__in=classes) | Q(timetable__isnull=True, school_class__in=classes),
+        whole_school | Q(timetable__classes__in=classes) | Q(timetable__isnull=True, school_class__in=classes),
         academic_year=year, term=term, day_of_week=entry['day_of_week'],
         start_time__lt=entry['end_time'], end_time__gt=entry['start_time'],
     ).distinct()
@@ -18,7 +19,7 @@ def conflicts(*, classes, year, term, entry, exclude_timetable=None, exclude_ent
         rows = rows.exclude(pk=exclude_entry)
     conflict = rows.select_related('school_class', 'timetable').first()
     if conflict:
-        affected = conflict.timetable.classes.filter(pk__in=[c.pk for c in classes]).first() if conflict.timetable_id else conflict.school_class
+        affected = classes[0] if conflict.timetable_id and conflict.timetable.scope == 'WHOLE_SCHOOL' else conflict.timetable.classes.filter(pk__in=[c.pk for c in classes]).first() if conflict.timetable_id else conflict.school_class
         raise ValidationError({'entries': f'{affected.name}: {conflict.day_of_week} conflicts with {conflict.start_time:%H:%M}–{conflict.end_time:%H:%M}.'})
 
 
@@ -31,6 +32,13 @@ def save_timetable(*, school, data, instance=None):
     classes = data.get('classes', list(instance.classes.all()) if instance else [])
     year = data.get('academic_year', instance.academic_year if instance else None)
     term = data.get('term', instance.term if instance else None)
+    scope = data.get('scope', instance.scope if instance else ('SINGLE' if len(classes) == 1 else 'MULTIPLE'))
+    if any(c.school_id != school.pk for c in classes):
+        raise ValidationError({'classes': 'Classes must belong to your school.'})
+    if scope == 'WHOLE_SCHOOL':
+        classes = list(SchoolClass.objects.filter(school=school, is_active=True).order_by('id'))
+    if scope == 'SINGLE' and len(classes) != 1:
+        raise ValidationError({'classes': 'Choose exactly one class.'})
     entries = data.get('entries')
     if entries is None:
         entries = [
@@ -57,10 +65,11 @@ def save_timetable(*, school, data, instance=None):
             if row['day_of_week'] == other['day_of_week'] and row['start_time'] < other['end_time'] and row['end_time'] > other['start_time']:
                 raise ValidationError({'entries': f"{classes[0].name}: overlapping {row['day_of_week']} rows at {row['start_time']:%H:%M}."})
     plan = instance or Timetable(school=school)
+    plan.scope = scope
     plan.name = data.get('name', plan.name)
     plan.academic_year, plan.term = year, term
     plan.save()
-    plan.classes.set(classes)
+    plan.classes.set([] if scope == 'WHOLE_SCHOOL' else classes)
     # Remove only rows explicitly removed by this edit. Preserve existing IDs.
     plan.entries.exclude(pk__in=submitted_ids).delete()
     # The deferred legacy uniqueness constraint allows time-slot swaps in one edit.

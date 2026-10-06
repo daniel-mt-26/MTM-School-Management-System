@@ -772,7 +772,7 @@ class TimetableEntryViewSet(SchoolAdminViewSet):
         # a single-class definition so they remain visible in the new workflow.
         plan = Timetable.objects.filter(school=self.get_school(), academic_year=entry.academic_year, term=entry.term).annotate(class_count=Count('classes')).filter(class_count=1, classes=entry.school_class).first()
         if plan is None:
-            plan = Timetable.objects.create(school=self.get_school(), name=f'{entry.school_class.name} timetable', academic_year=entry.academic_year, term=entry.term)
+            plan = Timetable.objects.create(school=self.get_school(), name=f'{entry.school_class.name} timetable', scope='SINGLE', academic_year=entry.academic_year, term=entry.term)
             plan.classes.add(entry.school_class)
         entry.timetable = plan
         entry.save(update_fields=['timetable'])
@@ -800,7 +800,7 @@ class TimetableEntryViewSet(SchoolAdminViewSet):
             if value := self.request.query_params.get(name):
                 queryset = queryset.filter(**{f"{name}_id": value})
         if value := self.request.query_params.get('school_class'):
-            queryset = queryset.filter(Q(timetable__classes__id=value) | Q(timetable__isnull=True, school_class_id=value)).distinct()
+            queryset = queryset.filter(Q(timetable__scope="WHOLE_SCHOOL", timetable__school__classes__id=value, timetable__school__classes__is_active=True) | Q(timetable__classes__id=value) | Q(timetable__isnull=True, school_class_id=value)).distinct()
         return queryset.order_by("day_of_week", "start_time", "end_time", "id")
 
 
@@ -813,7 +813,7 @@ class ParentStudentTimetableView(APIView):
             pk=student_id,
             parent_links__parent=request.user.parent_profile,
         )
-        entries = TimetableEntry.objects.filter(Q(timetable__classes=student.school_class) | Q(timetable__isnull=True, school_class=student.school_class)).distinct()
+        entries = TimetableEntry.objects.filter(Q(timetable__scope="WHOLE_SCHOOL", timetable__school=student.school, timetable__school__classes=student.school_class, timetable__school__classes__is_active=True) | Q(timetable__classes=student.school_class) | Q(timetable__isnull=True, school_class=student.school_class)).distinct()
         if year := request.query_params.get("academic_year"):
             entries = entries.filter(academic_year_id=year)
         if term := request.query_params.get("term"):

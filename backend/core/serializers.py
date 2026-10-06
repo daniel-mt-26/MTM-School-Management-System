@@ -5,7 +5,7 @@ from zipfile import BadZipFile, ZipFile
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.contrib.auth.password_validation import validate_password
-from django.db.models import Case, F, IntegerField, Sum, When
+from django.db.models import Case, F, IntegerField, Q, Sum, When
 from django.utils import timezone
 from rest_framework import serializers
 from PIL import Image, UnidentifiedImageError
@@ -769,6 +769,18 @@ class FeeSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
 
 
 class StudentFeeAssignmentSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    historical_class_ids = serializers.SerializerMethodField()
+
+    def get_historical_class_ids(self, assignment):
+        from datetime import timedelta
+        from .finance import billing_periods
+        start, end = assignment.assigned_on, assignment.assigned_on + timedelta(days=1)
+        if assignment.fee.recurring_template_id and assignment.fee.period_sequence:
+            periods = billing_periods(assignment.fee.recurring_template)
+            if assignment.fee.period_sequence <= len(periods):
+                start, end = periods[assignment.fee.period_sequence - 1]
+        return list(assignment.student.enrollments.filter(academic_year=assignment.fee.academic_year, enrolled_on__lt=end).filter(Q(left_on__isnull=True) | Q(left_on__gte=start)).values_list('school_class_id', flat=True).distinct())
+
     academic_year_name = serializers.CharField(source="fee.academic_year.name", read_only=True)
     term_name = serializers.CharField(source="fee.term.name", read_only=True)
     scoped_related_fields = {
@@ -790,7 +802,7 @@ class StudentFeeAssignmentSerializer(SchoolScopedSerializerMixin, serializers.Mo
 
     class Meta:
         model = StudentFeeAssignment
-        fields = ["id", "student", "student_name", "admission_number", "class_name", "fee", "fee_name", "academic_year_name", "term_name", "amount_owed", "currency", "assigned_on"]
+        fields = ["historical_class_ids", "id", "student", "student_name", "admission_number", "class_name", "fee", "fee_name", "academic_year_name", "term_name", "amount_owed", "currency", "assigned_on"]
         read_only_fields = ["id"]
 
 
@@ -892,6 +904,8 @@ class RecurringFeeTemplateSerializer(SchoolScopedSerializerMixin, serializers.Mo
         if not candidate.currency:
             candidate.currency = self.get_school().default_currency
             attrs["currency"] = candidate.currency
+        if candidate.term.academic_year_id != candidate.academic_year_id:
+            raise serializers.ValidationError({'term': 'Choose a term belonging to the selected academic year.'})
         used = self.instance and self.instance.generated_fees.exists()
         if candidate.billing_method != "LEGACY" and not used:
             for field, expected in (("start_month", candidate.term.start_date), ("end_month", candidate.term.end_date)):

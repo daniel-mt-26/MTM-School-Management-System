@@ -477,3 +477,28 @@ button:disabled { cursor: wait; opacity: 0.7; }
   .student-filters, .form-columns, .detail-grid, .parent-link-form, .academic-filters, .inventory-filters { grid-template-columns: 1fr; }
   .finance-summary { grid-template-columns: 1fr; }
 }
+
+/* Intentional links and visible attendance selection, including keyboard focus. */
+a, :where(a:visited) { color: #1755a0; }
+a:hover { color: #103c72; text-decoration: underline; }
+a:active { color: #0a294f; }
+a:focus-visible, button:focus-visible { outline: 3px solid #d68b00; outline-offset: 3px; }
+.attendance-status-buttons button[aria-pressed="true"], [role="group"] button[aria-pressed="true"] { background: #1755a0; color: white; border: 2px solid #103c72; box-shadow: 0 0 0 2px #b9d8fa; font-weight: 700; }
+
+.statement-document { background: white; padding: 2rem; color: #182331; }
+.statement-letterhead { border-bottom: 2px solid #182331; padding-bottom: 1rem; }
+.statement-letterhead img { max-width: 120px; max-height: 100px; float: right; }
+.statement-letterhead p { white-space: pre-line; margin: .3rem 0; }
+.statement-totals { max-width: 480px; margin-left: auto; }
+.statement-totals div { display: flex; justify-content: space-between; gap: 2rem; padding: .4rem; }
+.account-statement td:nth-last-child(-n+3) { text-align: right; white-space: nowrap; }
+@media print {
+  body:has(.account-statement) * { visibility: hidden; }
+  body:has(.account-statement) .statement-document, body:has(.account-statement) .statement-document * { visibility: visible; }
+  .account-statement .statement-document { position: absolute; left: 0; top: 0; width: 100%; padding: 0; font-size: 10pt; }
+  .statement-controls { display: none !important; }
+  .statement-document table { width: 100%; min-width: 0; }
+  .statement-document thead { display: table-header-group; }
+  .statement-document tr { break-inside: avoid; }
+  .statement-document .statement-totals { break-inside: avoid; }
+}

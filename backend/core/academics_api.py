@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.db.models import Q
 from rest_framework import serializers, status
 from rest_framework.response import Response
 
@@ -45,16 +46,18 @@ class TimetableSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Timetable
-        fields = ['id', 'name', 'academic_year', 'academic_year_name', 'term', 'term_name', 'classes', 'class_names', 'entries']
+        fields = ['id', 'name', 'scope', 'academic_year', 'academic_year_name', 'term', 'term_name', 'classes', 'class_names', 'entries']
 
     def get_class_names(self, obj):
-        return [c.name for c in obj.classes.all()]
+        return list(SchoolClass.objects.filter(school=obj.school, is_active=True).values_list('name', flat=True)) if obj.scope == 'WHOLE_SCHOOL' else [c.name for c in obj.classes.all()]
 
     def get_fields(self):
         fields = super().get_fields()
         school = self.context['school']
         fields['academic_year'].queryset = AcademicYear.objects.filter(school=school)
         fields['term'].queryset = Term.objects.filter(academic_year__school=school)
+        fields['classes'].required = False
+        fields['classes'].allow_empty = True
         fields['classes'].child_relation.queryset = SchoolClass.objects.filter(school=school)
         if isinstance(self.instance, Timetable):
             self.context['existing_labels'] = dict(self.instance.entries.values_list('id', 'label'))
@@ -83,7 +86,7 @@ class TimetableViewSet(SchoolAdminViewSet):
             if value := self.request.query_params.get(field):
                 rows = rows.filter(**{field + '_id': value})
         if value := self.request.query_params.get('school_class'):
-            rows = rows.filter(classes__id=value)
+            rows = rows.filter(Q(classes__id=value) | Q(scope="WHOLE_SCHOOL", school__classes__id=value, school__classes__is_active=True))
         return rows.distinct().order_by('name', 'id')
 
     @transaction.atomic

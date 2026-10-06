@@ -195,6 +195,7 @@ class ClassSubject(models.Model):
 
 
 class Timetable(models.Model):
+    scope = models.CharField(max_length=12, choices=[("SINGLE", "One Class"), ("MULTIPLE", "Multiple Classes"), ("WHOLE_SCHOOL", "Whole School")], default="MULTIPLE")
     school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="timetables")
     name = models.CharField(max_length=150)
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name="timetables")
