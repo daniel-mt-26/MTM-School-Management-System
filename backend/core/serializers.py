@@ -886,6 +886,20 @@ class ReceiptSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer
 
 
 class RecurringFeeTemplateSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    # These model columns remain non-null for legacy storage, but are not
+    # universally required request fields. Currency is never client-controlled.
+    currency = serializers.CharField(read_only=True)
+    start_month = serializers.DateField(required=False)
+    end_month = serializers.DateField(required=False, allow_null=True)
+
+    def get_fields(self):
+        fields = super().get_fields()
+        method = (getattr(self, 'initial_data', {}) or {}).get('billing_method', getattr(self.instance, 'billing_method', 'LEGACY'))
+        if method in {'MONTHLY', 'TERMLY', 'ONE_OFF'}:
+            fields['start_month'].read_only = True
+            fields['end_month'].read_only = True
+        return fields
+
     can_delete = serializers.SerializerMethodField()
 
     def get_can_delete(self, template):
@@ -901,16 +915,17 @@ class RecurringFeeTemplateSerializer(SchoolScopedSerializerMixin, serializers.Mo
         candidate = copy(self.instance) if self.instance else RecurringFeeTemplate(school=self.get_school())
         for key, value in attrs.items():
             setattr(candidate, key, value)
-        if not candidate.currency:
-            candidate.currency = self.get_school().default_currency
-            attrs["currency"] = candidate.currency
+        currency = (self.get_school().default_currency or '').strip()
+        if not currency:
+            raise serializers.ValidationError('School currency is not configured. Set the school currency before creating fees.')
+        if self.instance and self.instance.currency != currency:
+            raise serializers.ValidationError('This existing fee uses a different currency. Its financial history cannot be changed.')
+        candidate.currency = currency
+        attrs['currency'] = currency
         if candidate.term.academic_year_id != candidate.academic_year_id:
             raise serializers.ValidationError({'term': 'Choose a term belonging to the selected academic year.'})
         used = self.instance and self.instance.generated_fees.exists()
         if candidate.billing_method != "LEGACY" and not used:
-            for field, expected in (("start_month", candidate.term.start_date), ("end_month", candidate.term.end_date)):
-                if field in self.initial_data and attrs.get(field) != expected:
-                    raise serializers.ValidationError({field: "Billing dates are derived from the selected term."})
             candidate.start_month = candidate.term.start_date
             candidate.end_month = candidate.term.end_date
             attrs.update(start_month=candidate.start_month, end_month=candidate.end_month)

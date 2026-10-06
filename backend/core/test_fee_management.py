@@ -117,3 +117,33 @@ class FeeManagementTests(APITestCase):
         self.assertEqual(result.status_code, 201, result.data)
         self.assertEqual(result.data['receipt_number'], 'HIST-2025-001')
         self.assertTrue(result.data['paid_at'].startswith('2025-02-15'))
+
+
+    def test_server_controls_currency_and_managed_dates_before_field_validation(self):
+        self.authenticate(self.admin_a)
+        for method in ['MONTHLY', 'TERMLY', 'ONE_OFF']:
+            response = self.client.post('/api/school/recurring-fees/', {'name': 'Tuition', 'amount': '225.50', 'billing_method': method, 'academic_year': self.year_a.pk, 'term': self.term_a.pk, 'currency': 'EUR', 'start_month': '', 'end_month': ''}, format='json')
+            self.assertEqual(response.status_code, 201, response.data)
+            self.assertEqual(response.data['currency'], self.school_a.default_currency)
+            self.assertEqual(response.data['start_month'], self.term_a.start_date.isoformat())
+            self.assertEqual(response.data['end_month'], self.term_a.end_date.isoformat())
+
+    def test_missing_school_currency_has_configuration_error(self):
+        self.school_a.default_currency = ''
+        self.school_a.save(update_fields=['default_currency'])
+        self.authenticate(self.admin_a)
+        response = self.client.post('/api/school/recurring-fees/', {'name': 'Tuition', 'amount': '225', 'billing_method': 'TERMLY', 'academic_year': self.year_a.pk, 'term': self.term_a.pk}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('School currency is not configured', str(response.data))
+        self.assertNotIn('This field is required', str(response.data))
+
+    def test_legacy_still_requires_explicit_start_and_derives_currency(self):
+        self.authenticate(self.admin_a)
+        payload = {'name': 'Legacy', 'amount': '75', 'academic_year': self.year_a.pk, 'term': self.term_a.pk}
+        response = self.client.post('/api/school/recurring-fees/', payload, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('start_month', response.data)
+        payload['start_month'] = '2026-01-01'
+        response = self.client.post('/api/school/recurring-fees/', payload, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['currency'], 'USD')

@@ -94,7 +94,7 @@ test('timetable class selection, active subjects, activities and conflict explan
   fireEvent.click(screen.getByLabelText('Grade 4'))
   assert.deepEqual(current.classes, [1, 2])
   assert.equal(Boolean(screen.queryByRole('option', { name: 'Inactive subject' })), false)
-  assert.ok(screen.getByRole('option', { name: 'Mathematics' }))
+  assert.equal(screen.getByRole('combobox', { name: 'Subject' }).value, 'Mathematics')
   fireEvent.change(screen.getByLabelText('Entry Type'), { target: { value: 'activity' } })
   fireEvent.change(screen.getByLabelText('Activity'), { target: { value: 'Break' } })
   assert.equal(current.entries[0].subject, null)
@@ -247,7 +247,7 @@ test('Fees/Charges forms submit each billing method with cents and conditional s
     assert.equal(payload.amount, '75.50')
     assert.equal(payload.school_class, null)
     assert.equal(payload.student, null)
-    assert.equal('start_month' in payload, false)
+    for (const hidden of ['currency', 'start_month', 'end_month']) assert.equal(hidden in payload, false)
     await screen.findByText('Fee structure saved. No charges have been created.')
     fireEvent.click(screen.getByRole('button', { name: 'Charges', exact: true }))
     assert.ok(screen.getByLabelText('Student search'))
@@ -311,13 +311,72 @@ test('built-in and custom subjects are selected directly with no setup page', as
   let value
   function Picker() { const [selected, setSelected] = React.useState(''); value = selected; return React.createElement(SubjectPicker, { value: selected, onChange: setSelected }) }
   render(React.createElement(Picker))
-  await screen.findByRole('option', { name: 'English Language' })
-  fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'ZW-english' } })
+  fireEvent.focus(screen.getByLabelText('Subject'))
+  fireEvent.click(await screen.findByRole('option', { name: /English Language/ }))
   await waitFor(() => assert.equal(value, 33))
   assert.deepEqual(requests[0], ['subjects/activate', { keys: ['ZW-english'] }])
-  fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'custom' } })
+  fireEvent.focus(screen.getByLabelText('Subject'))
+  fireEvent.click(screen.getByRole('option', { name: 'Other / Custom Subject' }))
   fireEvent.change(screen.getByLabelText('Custom subject name'), { target: { value: 'Robotics' } })
   fireEvent.click(screen.getByRole('button', { name: 'Add custom subject' }))
   await waitFor(() => assert.equal(value, 34))
   assert.equal(requests[1][0], 'subjects')
+})
+
+
+test('subject autocomplete filters partial names and supports mouse, arrows, Enter and Escape', async () => {
+  const names = ['English Language', 'English for Communication', 'Literature in English', 'Mathematics', 'Functional Mathematics', 'Additional Mathematics', 'Pure Mathematics']
+  academicMock = async () => ({ groups: [{ name: 'Zimbabwe', subjects: names.map((name, index) => ({ key: `ZW-${index}`, name })) }] })
+  subjectSaveMock = async (resource, payload) => [{ id: 50, name: names[Number(payload.keys[0].slice(3))], is_active: true }]
+  let value
+  function Picker() { const [selected, setSelected] = React.useState(''); value = selected; return React.createElement(SubjectPicker, { value: selected, onChange: setSelected, subjects: [{ id: 99, name: 'Robotics', is_active: true }] }) }
+  render(React.createElement(Picker))
+  const input = screen.getByRole('combobox', { name: 'Subject' })
+  fireEvent.change(input, { target: { value: 'eNg' } })
+  await screen.findByRole('option', { name: /English Language/ })
+  assert.equal(screen.getAllByRole('option').length, 4)
+  assert.equal(Boolean(screen.queryByRole('option', { name: /Assembly|Break|Lunch|Sports/ })), false)
+  fireEvent.change(input, { target: { value: 'Math' } })
+  assert.equal(screen.getAllByRole('option').length, 5)
+  fireEvent.keyDown(input, { key: 'ArrowDown' })
+  fireEvent.keyDown(input, { key: 'ArrowUp' })
+  fireEvent.keyDown(input, { key: 'Enter' })
+  await waitFor(() => assert.equal(value, 50))
+  assert.equal(input.value, 'Mathematics')
+  assert.equal(input.getAttribute('aria-expanded'), 'false')
+  fireEvent.change(input, { target: { value: 'robot' } })
+  assert.equal(value, '')
+  fireEvent.keyDown(input, { key: 'Escape' })
+  assert.equal(Boolean(screen.queryByRole('listbox')), false)
+  fireEvent.keyDown(input, { key: 'ArrowDown' })
+  fireEvent.keyDown(input, { key: 'Enter' })
+  assert.equal(value, 99)
+  assert.equal(input.value, 'Robotics')
+})
+
+test('attendance selected buttons are blue, other statuses grey, and Mark All is local', async () => {
+  const style = document.createElement('style')
+  const css = await readFile(new URL('./App.css', import.meta.url), 'utf8')
+  style.textContent = css.split('\n').filter((line) => line.startsWith('.attendance-status-buttons') && !line.includes(':hover')).join('\n')
+  document.head.append(style)
+  const scope = `visual:${crypto.randomUUID()}`
+  academicMock = async (resource) => ({ classes, 'academic-years': years, terms })[resource]
+  saved = []
+  render(React.createElement(OfflineContext.Provider, { value: { scope, isReachable: true } }, React.createElement(AttendancePage)))
+  fireEvent.click(await screen.findByRole('button', { name: 'Grade 3' }))
+  await screen.findByRole('button', { name: 'Mark All Present' })
+  const group = within(screen.getByRole('group', { name: 'Attendance for Tariro Moyo' }))
+  for (const name of ['Absent', 'Late', 'Excused', 'Present']) {
+    fireEvent.click(group.getByRole('button', { name }))
+    assert.equal(group.getAllByRole('button', { pressed: true }).length, 1)
+    for (const button of group.getAllByRole('button')) {
+      assert.equal(window.getComputedStyle(button).backgroundColor, button.textContent === name ? 'rgb(23, 85, 160)' : 'rgb(241, 243, 245)')
+    }
+  }
+  fireEvent.click(group.getByRole('button', { name: 'Absent' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Mark All Present' }))
+  assert.equal(saved.length, 0)
+  for (const row of screen.getAllByRole('group')) assert.equal(within(row).getByRole('button', { pressed: true }).textContent, 'Present')
+  style.remove()
+  await clearOfflineScope(scope)
 })

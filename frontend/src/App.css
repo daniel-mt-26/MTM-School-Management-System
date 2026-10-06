@@ -483,7 +483,6 @@ a, :where(a:visited) { color: #1755a0; }
 a:hover { color: #103c72; text-decoration: underline; }
 a:active { color: #0a294f; }
 a:focus-visible, button:focus-visible { outline: 3px solid #d68b00; outline-offset: 3px; }
-.attendance-status-buttons button[aria-pressed="true"], [role="group"] button[aria-pressed="true"] { background: #1755a0; color: white; border: 2px solid #103c72; box-shadow: 0 0 0 2px #b9d8fa; font-weight: 700; }
 
 .statement-document { background: white; padding: 2rem; color: #182331; }
 .statement-letterhead { border-bottom: 2px solid #182331; padding-bottom: 1rem; }
@@ -502,3 +501,14 @@ a:focus-visible, button:focus-visible { outline: 3px solid #d68b00; outline-offs
   .statement-document tr { break-inside: avoid; }
   .statement-document .statement-totals { break-inside: avoid; }
 }
+
+.attendance-status-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.attendance-status-buttons button { margin: 0; background: #f1f3f5; color: #243247; border: 2px solid #aab4c2; box-shadow: none; }
+.attendance-status-buttons button[aria-pressed="true"] { background: #1755a0; color: white; border: 2px solid #103c72; box-shadow: 0 0 0 2px #b9d8fa; font-weight: 700; }
+.attendance-status-buttons button[aria-pressed="false"]:hover { background: #e0e5ec; border-color: #758398; }
+.attendance-status-buttons button[aria-pressed="true"]:hover { background: #103c72; }
+.subject-picker { position: relative; }
+.subject-suggestions { max-height: 260px; overflow-y: auto; margin: 4px 0; padding: 0; border: 1px solid #9baabd; border-radius: 6px; background: white; list-style: none; }
+.subject-suggestions [role="option"] { padding: 10px 12px; cursor: pointer; color: #243247; }
+.subject-suggestions [role="option"][aria-selected="true"], .subject-suggestions [role="option"]:hover { background: #1755a0; color: white; }
+.subject-suggestions small { display: block; }
