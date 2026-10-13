@@ -1,3 +1,4 @@
+from .intake_api import PublicApplication, PublicEnquiry, SchoolApplications, SchoolEnquiries
 from .reporting_api import AttendanceHistoryView, SchoolAccountStatementView, ParentAccountStatementView
 from .academics_api import TimetableViewSet
 from django.urls import include, path
@@ -72,6 +73,8 @@ from .views import (
 )
 
 router = DefaultRouter()
+router.register("school/applications", SchoolApplications, basename="school-application")
+router.register("school/enquiries", SchoolEnquiries, basename="school-enquiry")
 router.register("platform/schools", PlatformSchoolViewSet, basename="platform-school")
 router.register("school/classes", SchoolClassViewSet, basename="school-class")
 router.register("school/students", StudentViewSet, basename="school-student")
@@ -111,6 +114,8 @@ router.register("parent/notifications", ParentNotificationViewSet, basename="par
 router.register("parent/homework", ParentHomeworkViewSet, basename="parent-homework")
 
 urlpatterns = [
+    path("public/beavers/applications/", PublicApplication.as_view(), name="beavers-applications"),
+    path("public/beavers/enquiries/", PublicEnquiry.as_view(), name="beavers-enquiries"),
     path("school/attendance/history/", AttendanceHistoryView.as_view()),
     path("school/finance/students/<int:student_id>/statement/", SchoolAccountStatementView.as_view()),
     path("parent/students/<int:student_id>/statement/", ParentAccountStatementView.as_view()),

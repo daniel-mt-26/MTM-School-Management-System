@@ -1,0 +1,13 @@
+{% autoescape off %}Thank you for submitting an admission application to {{ school_name }}.
+
+Your application has been received. It was recorded as pending review when submitted.
+Application reference: {{ reference }}
+
+Submission does not guarantee admission. Please keep this reference when contacting the school.
+
+School contact details:
+Email: {{ school_contact_email }}
+Telephone: {{ school_contact_phones }}
+
+{{ school_name }}
+{% endautoescape %}

@@ -2223,3 +2223,7 @@ React provides the responsive user interface.
 n8n provides the external communication automation layer.
 
 The application is currently in **deployment preparation** and is not yet considered fully production deployed.
+
+## Online admissions and contact enquiries (Phase 1)
+
+The secure intake API is implemented but disabled by default. See [Phase 1 implementation and operations](docs/INTAKE_BACKEND_PHASE1.md) and backend/.env.intake.example for migration, tenant/privacy, origin, anti-spam, retention and email prerequisites. No automatic learner enrolment or website/dashboard connection is provided in this phase.

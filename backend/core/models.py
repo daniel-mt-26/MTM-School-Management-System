@@ -883,3 +883,6 @@ class AuditLog(models.Model):
             models.Index(fields=["school", "created_at"]),
             models.Index(fields=["school", "action", "created_at"]),
         ]
+
+# Private admissions/enquiries are registered in the existing core app.
+from .intake_models import AdmissionApplication, ContactEnquiry, AdmissionReviewHistory, EnquiryHandlingHistory, PublicIntakeKey, IntakeRateBucket, IntakeEmailOutbox

@@ -1,0 +1,11 @@
+{% autoescape off %}A new admission application has been received by {{ school_name }}.
+
+Application reference: {{ reference }}
+Requested grade: {{ grade }}
+Submission date: {{ submitted_at }}
+
+Review the application in the protected MTM admissions dashboard:
+{{ dashboard_url }}
+
+Sign in with your authorised school administrator account. Private student and guardian information remains in the dashboard.
+{% endautoescape %}

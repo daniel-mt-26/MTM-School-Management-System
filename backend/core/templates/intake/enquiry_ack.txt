@@ -1,0 +1,13 @@
+{% autoescape off %}Thank you for contacting {{ school_name }}.
+
+Your enquiry has been received.
+Enquiry reference: {{ reference }}
+
+The school will respond through the contact information you provided. Please keep this reference when contacting the school.
+
+School contact details:
+Email: {{ school_contact_email }}
+Telephone: {{ school_contact_phones }}
+
+{{ school_name }}
+{% endautoescape %}

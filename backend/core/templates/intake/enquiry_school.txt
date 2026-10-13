@@ -1,0 +1,10 @@
+{% autoescape off %}A new website enquiry has been received by {{ school_name }}.
+
+Enquiry reference: {{ reference }}
+Submission date: {{ submitted_at }}
+
+Review the full message in the protected MTM enquiries dashboard:
+{{ dashboard_url }}
+
+Sign in with your authorised school administrator account. The visitor's message and private contact information remain in the dashboard.
+{% endautoescape %}

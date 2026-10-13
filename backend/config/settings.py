@@ -110,6 +110,8 @@ if MAILER_BACKEND == "django.core.mail.backends.smtp.EmailBackend":
         "username": os.getenv("EMAIL_HOST_USER", ""),
         "password": os.getenv("EMAIL_HOST_PASSWORD", ""),
         "use_tls": env_bool("EMAIL_USE_TLS", True),
+        "use_ssl": env_bool("EMAIL_USE_SSL", False),
+        "timeout": int(os.getenv("EMAIL_TIMEOUT", "15")),
     }
 if IS_PRODUCTION and MAILER_BACKEND == "django.core.mail.backends.console.EmailBackend":
     raise RuntimeError("DJANGO_EMAIL_BACKEND must not use the console backend in production.")
@@ -159,3 +161,32 @@ LOGGING = {
         "core": {"handlers": ["console"], "level": os.getenv("DJANGO_LOG_LEVEL", "WARNING"), "propagate": False},
     },
 }
+
+# Intake is fail-closed until the real tenant and school-approved privacy are supplied.
+MTM_INTAKE_ENABLED = env_bool("MTM_INTAKE_ENABLED", False)
+MTM_INTAKE_BEAVERS_SCHOOL_ID = int(os.getenv("MTM_INTAKE_BEAVERS_SCHOOL_ID", "0"))
+MTM_INTAKE_PRIVACY_APPROVED = env_bool("MTM_INTAKE_PRIVACY_APPROVED", False)
+MTM_INTAKE_PRIVACY_VERSION = os.getenv("MTM_INTAKE_PRIVACY_VERSION", "")
+# School policy: one calendar month after rejection/resolution only.
+# Legacy application/enquiry RETENTION_DAYS environment values are ignored.
+MTM_INTAKE_TERMINAL_RETENTION_MONTHS = 1
+MTM_INTAKE_KEY_RETENTION_DAYS = int(os.getenv("MTM_INTAKE_KEY_RETENTION_DAYS", "0"))
+MTM_INTAKE_ALLOWED_ORIGINS = env_list("MTM_INTAKE_ALLOWED_ORIGINS")
+MTM_INTAKE_CHALLENGE_REQUIRED = env_bool("MTM_INTAKE_CHALLENGE_REQUIRED", IS_PRODUCTION)
+MTM_INTAKE_CHALLENGE_SECRET = os.getenv("MTM_INTAKE_CHALLENGE_SECRET", "")
+MTM_INTAKE_MAX_BYTES = int(os.getenv("MTM_INTAKE_MAX_BYTES", "16384"))
+MTM_INTAKE_IP_LIMIT = int(os.getenv("MTM_INTAKE_IP_LIMIT", "20"))
+MTM_INTAKE_SCHOOL_LIMIT = int(os.getenv("MTM_INTAKE_SCHOOL_LIMIT", "200"))
+MTM_INTAKE_RECIPIENT_LIMIT = int(os.getenv("MTM_INTAKE_RECIPIENT_LIMIT", "3"))
+MTM_INTAKE_SCHOOL_EMAIL = os.getenv("MTM_INTAKE_SCHOOL_EMAIL", "beaversecdcentre@gmail.com").strip()
+MTM_INTAKE_DASHBOARD_URL = os.getenv("MTM_INTAKE_DASHBOARD_URL", "").strip()
+MTM_INTAKE_CONTACT_EMAIL = os.getenv("MTM_INTAKE_CONTACT_EMAIL", "beaversecdcentre@gmail.com").strip()
+MTM_INTAKE_CONTACT_PHONES = os.getenv("MTM_INTAKE_CONTACT_PHONES", "+263 775 177 935 / +263 772 405 912").strip()
+MTM_INTAKE_EMAIL_ENABLED = env_bool("MTM_INTAKE_EMAIL_ENABLED", False)
+MTM_INTAKE_SMTP_VERIFIED = env_bool("MTM_INTAKE_SMTP_VERIFIED", False)
+MTM_INTAKE_EMAIL_MAX_ATTEMPTS = int(os.getenv("MTM_INTAKE_EMAIL_MAX_ATTEMPTS", "5"))
+MTM_INTAKE_EMAIL_LEASE_SECONDS = int(os.getenv("MTM_INTAKE_EMAIL_LEASE_SECONDS", "600"))
+from corsheaders.defaults import default_headers
+CORS_ALLOW_HEADERS = (*default_headers, "idempotency-key")
+
+MTM_INTAKE_TRUSTED_PROXY_CIDRS = env_list("MTM_INTAKE_TRUSTED_PROXY_CIDRS")
