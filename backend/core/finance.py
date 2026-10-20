@@ -7,7 +7,7 @@ without being coupled to financial persistence.
 
 from decimal import Decimal
 from calendar import monthrange
-from datetime import date
+from datetime import date, timedelta
 from hashlib import sha256
 import json
 
@@ -36,6 +36,19 @@ def billing_periods(template):
     while calendar_month(start, len(result)) < end:
         result.append((calendar_month(start, len(result)), min(calendar_month(start, len(result) + 1), end)))
     return result
+
+
+def assignment_period(assignment):
+    """The original billed period, shared by charges and debtor class filters."""
+    start, end = assignment.assigned_on, assignment.assigned_on + timedelta(days=1)
+    fee = assignment.fee
+    if fee.recurring_template_id and fee.period_sequence:
+        periods = billing_periods(fee.recurring_template)
+        if fee.period_sequence <= len(periods):
+            start, end = periods[fee.period_sequence - 1]
+    elif fee.recurring_template_id and fee.charge_month:
+        start, end = fee.charge_month, calendar_month(fee.charge_month, 1)
+    return start, end
 
 
 def eligible_students(template, start, end):
@@ -102,13 +115,15 @@ def generate_fee_structure(*, template, preview_token):
 
 def assignment_totals(assignment):
     paid = assignment.payments.filter(is_reversed=False).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
-    return assignment.amount_owed, paid, assignment.amount_owed - paid
+    adjustments = assignment.ledger_entries.filter(entry_type='adjustment').aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+    return assignment.amount_owed, paid, assignment.amount_owed + adjustments - paid
 
 
 def student_totals(student):
     charges = student.fee_assignments.aggregate(total=Sum("amount_owed"))["total"] or Decimal("0.00")
     payments = Payment.objects.filter(student_fee_assignment__student=student, is_reversed=False).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
-    return charges, payments, charges - payments
+    adjustments = student.ledger_entries.filter(entry_type='adjustment').aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+    return charges, payments, charges + adjustments - payments
 
 
 @transaction.atomic
@@ -146,10 +161,13 @@ def assign_fee(*, student, fee, amount_owed, assigned_on):
 
 
 @transaction.atomic
-def record_payment(*, student_fee_assignment, amount, paid_at, method, reference="", notes="", recorded_by, receipt_number=""):
+def record_payment(*, student_fee_assignment, amount, paid_at, method, reference="", notes="", recorded_by, receipt_number="", account=None, income_category=None, notify=True):
     # Lock the obligation before calculating the remaining amount so concurrent
     # administrators cannot both spend the same outstanding balance.
     assignment = StudentFeeAssignment.objects.select_for_update().select_related("student", "fee").get(pk=student_fee_assignment.pk)
+    for field, value in [('account', account), ('income_category', income_category)]:
+        if value and (value.school_id != assignment.student.school_id or not value.is_active or (field == 'income_category' and value.kind != 'income')):
+            raise ValidationError({field: 'Choose an active matching record from this school.'})
     _, _, outstanding = assignment_totals(assignment)
     if amount > outstanding:
         raise ValidationError({"amount": f"Payment cannot exceed the outstanding amount of {outstanding}."})
@@ -164,6 +182,8 @@ def record_payment(*, student_fee_assignment, amount, paid_at, method, reference
         reference=reference,
         notes=notes,
         recorded_by=recorded_by,
+        account=account,
+        income_category=income_category,
     )
     FinancialLedgerEntry.objects.create(
         student=assignment.student,
@@ -187,7 +207,8 @@ def record_payment(*, student_fee_assignment, amount, paid_at, method, reference
     # This creates only local durable in-app/outbox records. It deliberately
     # performs no provider or n8n HTTP call inside the financial transaction.
     from .communications import create_payment_receipt_messages
-    create_payment_receipt_messages(payment, receipt)
+    if notify:
+        create_payment_receipt_messages(payment, receipt)
     return payment, receipt
 
 

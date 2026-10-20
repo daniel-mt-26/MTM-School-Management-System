@@ -36,4 +36,4 @@ class IsPlatformAdministrator(BasePermission):
 
     def has_permission(self, request, view):
         user = request.user
-        return bool(user and user.is_authenticated and user.role == User.Role.PLATFORM_ADMIN)
+        return bool(user and user.is_authenticated and user.role == User.Role.PLATFORM_ADMIN and not user.must_change_password)

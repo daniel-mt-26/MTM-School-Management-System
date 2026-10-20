@@ -23,7 +23,7 @@ const moduleCache = new Map()
 const mocks = {
   'react-router-dom': { useParams: () => ({ studentId: '1' }), Link: ({ to, children, ...props }) => React.createElement('a', { href: to, ...props }, children) },
   '../offline/context': { OfflineContext },
-  '../api/client': { apiClient: (...args) => apiMock(...args) },
+  '../api/client': { apiClient: (...args) => apiMock(...args), apiDownload: async () => {} },
   '../api/students': { getStudents: async () => [] },
   '../api/finance': { getFinanceRecords: async (resource) => financeData[resource] || [], saveFinanceRecord: (...args) => saveFeeMock(...args) },
   '../api/academics': { getAcademicRecords: (resource) => academicMock(resource), saveAcademicRecord: (...args) => subjectSaveMock(...args) },
@@ -249,7 +249,7 @@ test('Fees/Charges forms submit each billing method with cents and conditional s
     assert.equal(payload.student, null)
     for (const hidden of ['currency', 'start_month', 'end_month']) assert.equal(hidden in payload, false)
     await screen.findByText('Fee structure saved. No charges have been created.')
-    fireEvent.click(screen.getByRole('button', { name: 'Charges', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Student Charges', exact: true }))
     assert.ok(screen.getByLabelText('Student search'))
     view.unmount()
   }
@@ -281,7 +281,7 @@ test('fee field errors retain their field names and generation requires confirma
 
 test('parent statement displays letterhead, filters and a read-only printable report', async () => {
   const calls = []
-  apiMock = async (path) => { calls.push(path); return { school: { name: 'School A', address: '1 School Road' }, student: { name: 'Tariro', admission_number: '001', class_name: 'Grade 3' }, currency: 'USD', generated_at: '2026-10-06T10:00:00Z', years, terms, transactions: [{ date: '2026-01-14', reference: 'FEE-1', description: 'Tuition', debit: '100', credit: '0', balance: '100' }], summary: { opening_balance: '0', charges: '100', payments: '0', adjustments_reversals: '0', closing_balance: '100' } } }
+  apiMock = async (path) => { calls.push(path); return { school: { name: 'School A', address: '1 School Road' }, student: { name: 'Tariro', admission_number: '001', class_name: 'Grade 3' }, currency: 'USD', generated_at: '2026-10-06T10:00:00Z', years, terms, period: { start: null, end: null }, transactions: [{ date: '2026-01-14', reference: 'FEE-1', description: 'Tuition', debit: '100', credit: '0', balance: '100' }], summary: { opening_balance: '0', charges: '100', payments: '0', adjustments_reversals: '0', closing_balance: '100' } } }
   let printed = false
   window.print = () => { printed = true }
   render(React.createElement(AccountStatementPage, { parent: true }))
@@ -289,11 +289,11 @@ test('parent statement displays letterhead, filters and a read-only printable re
   assert.ok(screen.getByText('1 School Road'))
   assert.ok(screen.getByText('FEE-1'))
   assert.equal(Boolean(screen.queryByRole('img')), false)
-  assert.equal(Boolean(screen.queryByRole('button', { name: /delete|edit|save payment/i })), false)
+  assert.equal(Boolean(screen.queryByRole('button', { name: /^(delete|edit|save payment)/i })), false)
   fireEvent.change(screen.getByLabelText('Academic Year'), { target: { value: '1' } })
   await screen.findByText('STATEMENT OF ACCOUNT')
   assert.match(calls.at(-1), /parent\/students\/1\/statement\/\?academic_year=1/)
-  fireEvent.click(screen.getByRole('button', { name: 'Print / Save PDF' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Print Statement' }))
   assert.equal(printed, true)
   const css = await readFile(new URL('./App.css', import.meta.url), 'utf8')
   assert.match(css, /a, :where\(a:visited\)\s*\{ color: #1755a0/)

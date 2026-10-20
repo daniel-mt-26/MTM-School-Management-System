@@ -1,5 +1,5 @@
 import { useContext, useState } from 'react'
-import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { AuthContext } from '../auth/context'
 import { routeForRole } from '../auth/roleRoutes'
 
@@ -52,7 +52,7 @@ export default function LoginPage() {
           <label htmlFor="password">Password</label>
           <input id="password" name="password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required />
           <button type="submit" disabled={isSubmitting}>{isSubmitting ? 'Signing in…' : 'Sign in'}</button>
-        </form>
+        </form><Link to="/forgot-password">Forgot password?</Link>
       </section>
     </main>
   )

@@ -23,6 +23,8 @@ def account_failure(user, *, login=False):
         status = user.school_administrator.school.status
     elif user.role == User.Role.PARENT and hasattr(user, "parent_profile"):
         status = user.parent_profile.school.status
+    elif user.role == User.Role.TEACHER and hasattr(user, "teacher_profile"):
+        status = user.teacher_profile.school.status
     else:
         status = None
     if status == "suspended":
@@ -48,6 +50,8 @@ def user_can_use_mtm(user):
         return hasattr(user, "school_administrator") and user.school_administrator.school.is_operational
     if user.role == User.Role.PARENT:
         return hasattr(user, "parent_profile") and user.parent_profile.school.is_operational
+    if user.role == User.Role.TEACHER:
+        return hasattr(user, "teacher_profile") and user.teacher_profile.is_active and user.teacher_profile.school.is_operational
     return False
 
 
@@ -59,7 +63,7 @@ def token_user_or_fail(token):
     user_id = token.get(api_settings.USER_ID_CLAIM)
     try:
         user = get_user_model().objects.select_related(
-            "school_administrator__school", "parent_profile__school"
+            "school_administrator__school", "parent_profile__school", "teacher_profile__school"
         ).get(**{api_settings.USER_ID_FIELD: user_id})
     except get_user_model().DoesNotExist as exc:
         raise AuthenticationFailed("No active account found for the given credentials.") from exc

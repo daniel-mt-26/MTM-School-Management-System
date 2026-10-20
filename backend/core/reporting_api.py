@@ -7,8 +7,9 @@ from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from .models import AcademicYear, Term, Student, AttendanceRecord, StudentFeeAssignment, Payment, FinancialLedgerEntry
+from .models import AcademicYear, Term, Student, AttendanceRecord
 from .permissions import IsSchoolAdministrator, IsParent
+from .staff_access import IsAcademicStaff, staff_school
 
 
 class ReportFilters(serializers.Serializer):
@@ -40,12 +41,14 @@ def filters(request, school):
 
 
 class AttendanceHistoryView(APIView):
-    permission_classes = [IsSchoolAdministrator]
+    permission_classes = [IsAcademicStaff]
 
     def get(self, request):
-        school = request.user.school_administrator.school
+        school = staff_school(request.user)
         selected = filters(request, school)
         rows = AttendanceRecord.objects.filter(school=school, enrollment__student__school=school, enrollment__school_class__school=school).select_related('enrollment__student', 'enrollment__school_class', 'academic_year', 'term')
+        if request.user.role == 'teacher':
+            rows = rows.filter(enrollment__school_class__teacher_assignments__teacher=request.user.teacher_profile)
         for key, lookup in {'academic_year': 'academic_year_id', 'term': 'term_id', 'school_class': 'enrollment__school_class_id', 'student': 'enrollment__student_id', 'date_from': 'attendance_date__gte', 'date_to': 'attendance_date__lte'}.items():
             if key in selected:
                 rows = rows.filter(**{lookup: selected[key]})
@@ -57,39 +60,26 @@ class AttendanceHistoryView(APIView):
 
 
 def account_statement(student, request):
+    from .financial_reports import statement_events, charges_for, paid_as_of
+    from .documents import branding
     school = student.school
     selected = filters(request, school)
-    charges = StudentFeeAssignment.objects.filter(student=student, fee__school=school).select_related('fee')
-    for key in ('academic_year', 'term'):
-        if key in selected:
-            charges = charges.filter(**{'fee__' + key + '_id': selected[key]})
-    events = []
-    def add(date, key, reference, description, debit, credit, kind):
-        events.append(dict(date=date, key=key, reference=reference, description=description, debit=debit, credit=credit, kind=kind))
-    for charge in charges:
-        add(charge.assigned_on, (0, charge.pk), f'FEE-{charge.fee_id}', charge.fee.name, charge.amount_owed, Decimal(0), 'charge')
-    for payment in Payment.objects.filter(student_fee_assignment__in=charges).select_related('receipt', 'student_fee_assignment__fee'):
-        reference = payment.receipt.receipt_number if hasattr(payment, 'receipt') else payment.reference or f'PAY-{payment.pk}'
-        add(payment.paid_at.date(), (1, payment.pk), reference, 'Payment: ' + payment.student_fee_assignment.fee.name, Decimal(0), payment.amount, 'payment')
-        if payment.is_reversed and payment.reversed_at:
-            add(payment.reversed_at.date(), (2, payment.pk), reference, 'Payment reversal: ' + payment.reversal_reason, payment.amount, Decimal(0), 'reversal')
-    # Charge/payment ledger entries mirror the obligations above. Include only
-    # independent adjustments, avoiding duplicate charges or reversal entries.
-    adjustments = FinancialLedgerEntry.objects.filter(student=student, entry_type='adjustment')
-    if selected.get('academic_year') or selected.get('term'):
-        adjustments = adjustments.filter(fee_assignment__in=charges)
-    for entry in adjustments:
-        add(entry.occurred_at.date(), (3, entry.pk), f'ADJ-{entry.pk}', entry.description, max(entry.amount, Decimal(0)), max(-entry.amount, Decimal(0)), 'adjustment')
-    events.sort(key=lambda row: (row['date'], row['key']))
+    context = (Term.objects.get(pk=selected['term']) if selected.get('term') else
+               AcademicYear.objects.get(pk=selected['academic_year']) if selected.get('academic_year') else None)
+    start = selected.get('date_from') or (context.start_date if context else None)
+    end = selected.get('date_to') or (context.end_date if context else None)
+    if start and end and start > end:
+        raise serializers.ValidationError('The selected statement period is empty.')
+    events = statement_events(student)
     opening = Decimal(0)
     balance = Decimal(0)
     totals = {key: Decimal(0) for key in ('charges', 'payments', 'adjustments_reversals')}
     rows = []
     for row in events:
         delta = row['debit'] - row['credit']
-        if selected.get('date_to') and row['date'] > selected['date_to']:
+        if end and row['date'] > end:
             continue
-        if selected.get('date_from') and row['date'] < selected['date_from']:
+        if start and row['date'] < start:
             opening += delta
             balance += delta
             continue
@@ -97,9 +87,13 @@ def account_statement(student, request):
         totals['charges' if row['kind'] == 'charge' else 'payments' if row['kind'] == 'payment' else 'adjustments_reversals'] += row['credit'] if row['kind'] == 'payment' else delta
         row.pop('key')
         rows.append({**row, 'balance': balance})
-    return {'school': {'name': school.name, 'logo': request.build_absolute_uri(school.logo.url) if school.logo else None, 'address': school.address, 'phone': school.phone_number, 'email': school.email},
+    as_of = end or timezone.localdate()
+    due_dates = [c.fee.due_date or c.assigned_on for c in charges_for(school, {}, student)
+                 if c.assigned_on <= as_of and c.amount_owed + sum((e.amount for e in c.ledger_entries.all()
+                     if e.entry_type == 'adjustment' and e.occurred_at.date() <= as_of), Decimal(0)) > paid_as_of(c, as_of)]
+    return {'school': branding(school, request), 'due_date': min(due_dates) if due_dates and balance > 0 else None,
             'student': {'id': student.pk, 'name': f'{student.first_name} {student.last_name}', 'admission_number': student.admission_number, 'class_name': student.school_class.name},
-            'currency': school.default_currency, 'generated_at': timezone.now(), 'filters': selected,
+            'currency': school.default_currency, 'generated_at': timezone.now(), 'filters': selected, 'period': {'start': start, 'end': end},
             'years': list(AcademicYear.objects.filter(school=school).values('id', 'name')),
             'terms': list(Term.objects.filter(academic_year__school=school).values('id', 'name', 'academic_year')),
             'transactions': rows, 'summary': {'opening_balance': opening, **totals, 'closing_balance': balance}}
@@ -110,12 +104,14 @@ class SchoolAccountStatementView(APIView):
 
     def get(self, request, student_id):
         student = get_object_or_404(Student.objects.select_related('school', 'school_class'), pk=student_id, school=request.user.school_administrator.school)
-        return Response(account_statement(student, request))
+        from .finance_documents import statement_response
+        return statement_response(student, request)
 
 
 class ParentAccountStatementView(APIView):
     permission_classes = [IsParent]
 
     def get(self, request, student_id):
-        student = get_object_or_404(Student.objects.select_related('school', 'school_class'), pk=student_id, parent_links__parent=request.user.parent_profile)
-        return Response(account_statement(student, request))
+        student = get_object_or_404(Student.objects.select_related('school', 'school_class'), pk=student_id, school=request.user.parent_profile.school, parent_links__parent=request.user.parent_profile)
+        from .finance_documents import statement_response
+        return statement_response(student, request)

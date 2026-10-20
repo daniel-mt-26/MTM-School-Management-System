@@ -3,7 +3,7 @@ import { tokenStorage } from './auth'
 
 function queryString(params = {}) { const query = new URLSearchParams(); Object.entries(params).forEach(([key, value]) => { if (value !== '' && value !== undefined && value !== null) query.set(key, value) }); return query.toString() ? `?${query}` : '' }
 export const getFinanceRecords = (resource, params) => apiClient(`/school/${resource}/${queryString(params)}`)
-export const saveFinanceRecord = (resource, data, id) => apiClient(`/school/${resource}/${id ? `${id}/` : ''}`, { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
+export const saveFinanceRecord = (resource, data, id, operationId) => apiClient(`/school/${resource}/${id ? `${id}/` : ''}`, { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json', ...(operationId ? { 'Idempotency-Key': operationId } : {}) }, body: JSON.stringify(data) })
 export const assignFeeToClass = (data) => apiClient('/school/fee-assignments/assign-to-class/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
 export const getBalances = (params) => apiClient(`/school/finance/balances/${queryString(params)}`)
 export const getLedgerTotals = (params) => apiClient(`/school/ledger/totals/${queryString(params)}`)

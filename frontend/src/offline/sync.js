@@ -23,6 +23,7 @@ function unresolvedLocalReference(value, mappings) {
 export async function sendQueuedOperation(operation) {
   const { apiClient } = await import('../api/client.js')
   return apiClient(operation.path, {
+    expectedScope: operation.scope,
     method: operation.method,
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': operation.id },
     body: JSON.stringify(operation.payload),

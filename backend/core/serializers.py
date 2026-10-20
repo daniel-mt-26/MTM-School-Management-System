@@ -327,6 +327,8 @@ class SchoolProfileSerializer(serializers.ModelSerializer):
         currency = attrs.get("default_currency")
         if currency and self.instance and currency != self.instance.default_currency:
             has_finance = Fee.objects.filter(school=self.instance).exists() or StudentFeeAssignment.objects.filter(student__school=self.instance).exists() or Payment.objects.filter(student_fee_assignment__student__school=self.instance).exists() or FinancialLedgerEntry.objects.filter(student__school=self.instance).exists()
+            from .models import ManualIncome
+            has_finance = has_finance or Expense.objects.filter(school=self.instance).exists() or ManualIncome.objects.filter(school=self.instance).exists()
             if has_finance:
                 raise serializers.ValidationError({"default_currency": "Currency cannot be changed after financial records exist; this protects historical amounts."})
         return attrs
@@ -503,6 +505,8 @@ class ParentChildSerializer(serializers.ModelSerializer):
 
 
 class ParentDetailSerializer(serializers.ModelSerializer):
+    is_active = serializers.BooleanField(source="user.is_active", read_only=True)
+    last_login = serializers.DateTimeField(source="user.last_login", read_only=True)
     username = serializers.CharField(source="user.username", read_only=True)
     email = serializers.EmailField(source="user.email", read_only=True)
     first_name = serializers.CharField(source="user.first_name", read_only=True)
@@ -511,7 +515,7 @@ class ParentDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Parent
-        fields = ["id", "username", "email", "first_name", "last_name", "phone_number", "address", "children"]
+        fields = ["id", "username", "email", "first_name", "last_name", "phone_number", "address", "children", "is_active", "last_login"]
         read_only_fields = fields
 
 
@@ -529,10 +533,10 @@ class ParentWriteSerializer(serializers.Serializer):
         if "school" in self.initial_data or "school_id" in self.initial_data:
             raise serializers.ValidationError({"school": "School ownership is controlled by the authenticated account."})
         if self.instance is None:
-            for field in ("username", "password", "phone_number"):
+            for field in ("phone_number",):
                 if not attrs.get(field):
                     raise serializers.ValidationError({field: "This field is required."})
-            if User.objects.filter(username=attrs["username"]).exists():
+            if attrs.get("username") and User.objects.filter(username=attrs["username"]).exists():
                 raise serializers.ValidationError({"username": "This username is already in use."})
         if "password" in attrs:
             candidate = self.instance.user if self.instance else User(username=attrs.get("username", ""))
@@ -550,13 +554,11 @@ class ParentWriteSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         children = validated_data.pop("children", [])
-        password = validated_data.pop("password")
+        validated_data.pop("password", None)
         school = self.context["school"]
         user_fields = {key: validated_data.pop(key, "") for key in ("username", "first_name", "last_name", "email")}
-        user = User(**user_fields, role=User.Role.PARENT)
-        user.set_password(password)
-        user.full_clean()
-        user.save()
+        from .credentials import create_login
+        user, self.temporary_password = create_login(role=User.Role.PARENT, **user_fields)
         parent = Parent.objects.create(school=school, user=user, **validated_data)
         for child in Student.objects.filter(school=school, id__in=children):
             ParentStudent.objects.create(parent=parent, student=child)
@@ -570,6 +572,8 @@ class ParentWriteSerializer(serializers.Serializer):
             setattr(instance.user, key, value)
         if password:
             instance.user.set_password(password)
+            instance.user.token_version += 1
+            instance.user.must_change_password = True
         if user_changes or password:
             instance.user.full_clean()
             instance.user.save()
@@ -772,13 +776,8 @@ class StudentFeeAssignmentSerializer(SchoolScopedSerializerMixin, serializers.Mo
     historical_class_ids = serializers.SerializerMethodField()
 
     def get_historical_class_ids(self, assignment):
-        from datetime import timedelta
-        from .finance import billing_periods
-        start, end = assignment.assigned_on, assignment.assigned_on + timedelta(days=1)
-        if assignment.fee.recurring_template_id and assignment.fee.period_sequence:
-            periods = billing_periods(assignment.fee.recurring_template)
-            if assignment.fee.period_sequence <= len(periods):
-                start, end = periods[assignment.fee.period_sequence - 1]
+        from .finance import assignment_period
+        start, end = assignment_period(assignment)
         return list(assignment.student.enrollments.filter(academic_year=assignment.fee.academic_year, enrolled_on__lt=end).filter(Q(left_on__isnull=True) | Q(left_on__gte=start)).values_list('school_class_id', flat=True).distinct())
 
     academic_year_name = serializers.CharField(source="fee.academic_year.name", read_only=True)
@@ -807,6 +806,12 @@ class StudentFeeAssignmentSerializer(SchoolScopedSerializerMixin, serializers.Mo
 
 
 class PaymentSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    def get_fields(self):
+        from .models import FinanceAccount, FinanceCategory
+        fields = super().get_fields()
+        fields['account'].queryset = FinanceAccount.objects.filter(school=self.get_school())
+        fields['income_category'].queryset = FinanceCategory.objects.filter(school=self.get_school(), kind='income')
+        return fields
     receipt_number = serializers.CharField(required=False, allow_blank=True, max_length=50, write_only=True)
     scoped_related_fields = {"student_fee_assignment": (StudentFeeAssignment, "student__school_class__school")}
     student_name = serializers.SerializerMethodField()
@@ -835,7 +840,7 @@ class PaymentSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer
 
     class Meta:
         model = Payment
-        fields = ["id", "student_fee_assignment", "student_name", "admission_number", "fee_name", "amount", "currency", "paid_at", "method", "reference", "notes", "receipt_number", "recorded_by", "created_at", "is_reversed", "reversed_at", "reversal_reason", "outstanding_before"]
+        fields = ["id", "student_fee_assignment", "student_name", "admission_number", "fee_name", "amount", "currency", "paid_at", "method", "reference", "notes", "receipt_number", "recorded_by", "created_at", "is_reversed", "reversed_at", "reversal_reason", "outstanding_before", "account", "income_category"]
         read_only_fields = ["id", "currency", "recorded_by", "created_at", "is_reversed", "reversed_at", "reversal_reason", "outstanding_before"]
 
 
@@ -1166,11 +1171,13 @@ class AcademicResultSerializer(SchoolScopedSerializerMixin, serializers.ModelSer
 
     class Meta:
         model = AcademicResult
-        fields = ["id", "student_enrollment", "student_name", "admission_number", "class_name", "academic_year_name", "term", "term_name", "class_subject", "subject_name", "score", "maximum_score", "percentage", "comment", "recorded_by", "recorded_at"]
-        read_only_fields = ["id", "recorded_by", "recorded_at"]
+        fields = ["id", "student_enrollment", "student_name", "admission_number", "class_name", "academic_year_name", "term", "term_name", "class_subject", "subject_name", "score", "maximum_score", "percentage", "comment", "recorded_by", "recorded_at", "status"]
+        read_only_fields = ["id", "recorded_by", "recorded_at", "status"]
 
 
 class ReportCardSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
+    def create(self, validated_data):
+        return super().create({**validated_data, "is_published": False})
     scoped_related_fields = {
         "student_enrollment": (StudentEnrollment, "school_class__school"),
         "term": (Term, "academic_year__school"),
@@ -1192,8 +1199,8 @@ class ReportCardSerializer(SchoolScopedSerializerMixin, serializers.ModelSeriali
 
     class Meta:
         model = ReportCard
-        fields = ["id", "student_enrollment", "student_name", "admission_number", "class_name", "academic_year_name", "term", "term_name", "generated_at", "file", "download_url"]
-        read_only_fields = ["id", "generated_at"]
+        fields = ["id", "student_enrollment", "student_name", "admission_number", "class_name", "academic_year_name", "term", "term_name", "generated_at", "file", "download_url", "is_published"]
+        read_only_fields = ["id", "generated_at", "is_published"]
 
 
 class NotificationSerializer(SchoolScopedSerializerMixin, serializers.ModelSerializer):
@@ -1397,6 +1404,16 @@ class ParentResultSerializer(serializers.ModelSerializer):
 
 
 class ParentReportCardSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+    term_name = serializers.CharField(source="term.name", read_only=True)
+    comments = serializers.SerializerMethodField()
+
+    def get_student_name(self, card):
+        student = card.student_enrollment.student
+        return f"{student.first_name} {student.last_name}"
+
+    def get_comments(self, card):
+        return list(card.student_enrollment.teacher_comments.filter(term=card.term).values_list("comment", flat=True))
     download_url = serializers.SerializerMethodField()
 
     def get_download_url(self, report_card):
@@ -1404,7 +1421,7 @@ class ParentReportCardSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ReportCard
-        fields = ["id", "student_enrollment", "term", "generated_at", "download_url"]
+        fields = ["id", "student_enrollment", "student_name", "term", "term_name", "generated_at", "download_url", "comments"]
         read_only_fields = fields
 
 

@@ -1,3 +1,4 @@
+import SortableTable from '../components/SortableTable.jsx'
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
@@ -93,5 +94,5 @@ export default function CommunicationPage() {
 
 function HistoryTable({ rows, detailed = false }) {
   if (!rows.length) return <p className="muted-copy">No communication records are available.</p>
-  return <div className="student-table-wrap"><table className="student-table"><thead><tr><th>Date</th><th>{detailed ? 'Recipient' : 'Audience'}</th>{detailed && <th>Student</th>}<th>Type</th>{detailed && <><th>Channel</th><th>Status</th></>}</tr></thead><tbody>{rows.map((item) => <tr key={item.id}><td>{new Date(item.created_at).toLocaleString()}</td><td>{detailed ? (item.parent_name || 'Parent') : `${item.audience.replace('_', ' ')}`}</td>{detailed && <td>{item.student_name || '—'}</td>}<td>{detailed ? item.description : item.title}</td>{detailed && <><td>{item.channel}</td><td>{item.status}{item.failure_reason ? ` — ${item.failure_reason}` : ''}</td></>}</tr>)}</tbody></table></div>
+  return <div className="student-table-wrap"><SortableTable className="student-table"><thead><tr><th>Date</th><th>{detailed ? 'Recipient' : 'Audience'}</th>{detailed && <th>Student</th>}<th>Type</th>{detailed && <><th>Channel</th><th>Status</th></>}</tr></thead><tbody>{rows.map((item) => <tr key={item.id}><td>{new Date(item.created_at).toLocaleString()}</td><td>{detailed ? (item.parent_name || 'Parent') : `${item.audience.replace('_', ' ')}`}</td>{detailed && <td>{item.student_name || '—'}</td>}<td>{detailed ? item.description : item.title}</td>{detailed && <><td>{item.channel}</td><td>{item.status}{item.failure_reason ? ` — ${item.failure_reason}` : ''}</td></>}</tr>)}</tbody></SortableTable></div>
 }

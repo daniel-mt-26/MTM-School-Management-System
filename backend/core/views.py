@@ -60,6 +60,7 @@ from .models import (
     TimetableEntry,
     User,
 )
+from .staff_access import IsAcademicStaff, staff_school, assigned_class
 from .authentication import MTMTokenObtainPairSerializer, MTMTokenRefreshSerializer
 from .finance import assign_fee, assignment_totals, generate_recurring_charges, record_payment, reverse_payment, student_totals
 from .communications import (
@@ -147,92 +148,8 @@ class MTMTokenRefreshView(TokenRefreshView):
 
 
 def receipt_pdf_response(receipt):
-    """A server-generated, school-branded single-page PDF receipt."""
-    payment = receipt.payment
-    assignment = payment.student_fee_assignment
-    student = assignment.student
-    school = student.school
-    _, _, outstanding = assignment_totals(assignment)
-
-    def escape(value):
-        return str(value).replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)").encode("latin-1", "replace").decode("latin-1")
-
-    logo_data = None
-    logo_size = None
-    if school.logo:
-        try:
-            from io import BytesIO
-            from PIL import Image
-
-            school.logo.open("rb")
-            image = Image.open(school.logo).convert("RGB")
-            image.thumbnail((120, 120))
-            logo_size = image.size
-            output = BytesIO()
-            image.save(output, format="JPEG", quality=85)
-            logo_data = output.getvalue()
-            school.logo.close()
-        except Exception:
-            # A receipt must remain downloadable if a previously uploaded logo
-            # becomes unavailable or cannot be decoded by the storage backend.
-            logo_data = None
-            logo_size = None
-
-    details = [
-        "PAYMENT RECEIPT",
-        f"Receipt number: {receipt.receipt_number}",
-        f"Payment date: {payment.paid_at:%Y-%m-%d %H:%M}",
-        f"Student: {student.first_name} {student.last_name}",
-        f"Admission number: {student.admission_number}",
-        f"Class: {student.school_class.name}",
-        f"Fee / Charge: {assignment.fee.name}",
-        f"Amount paid: {payment.currency} {payment.amount}",
-        f"Currency: {payment.currency}",
-        f"Payment method: {payment.method}",
-        f"Reference: {payment.reference or '-'}",
-        f"Recorded date: {payment.created_at:%Y-%m-%d %H:%M}",
-        f"Outstanding balance: {payment.currency} {outstanding}",
-        "STATUS: REVERSED" if receipt.is_reversed else "STATUS: PAID",
-    ]
-    identity = [school.name, school.address.replace("\n", ", ") or "", f"Phone: {school.phone_number}", f"Email: {school.email}"]
-    commands = ["BT", "/F1 18 Tf", "50 748 Td", f"({escape(identity[0])}) Tj", "/F1 10 Tf"]
-    for line in identity[1:]:
-        if line:
-            commands.extend(["0 -16 Td", f"({escape(line[:100])}) Tj"])
-    commands.extend(["0 -34 Td", "/F1 15 Tf", f"({escape(details[0])}) Tj", "/F1 10 Tf"])
-    for line in details[1:]:
-        commands.extend(["0 -19 Td", f"({escape(line[:110])}) Tj"])
-    commands.append("ET")
-    if logo_data and logo_size:
-        width, height = logo_size
-        rendered_height = max(1, round(120 * height / width))
-        commands.insert(0, f"q 120 0 0 {rendered_height} 442 650 cm /Im1 Do Q")
-    stream = "\n".join(commands).encode("latin-1")
-    resources = "<< /Font << /F1 5 0 R >>"
-    if logo_data:
-        resources += " /XObject << /Im1 6 0 R >>"
-    resources += " >>"
-    objects = [
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources {resources} /Contents 4 0 R >>".encode("latin-1"),
-        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    ]
-    if logo_data and logo_size:
-        width, height = logo_size
-        objects.append(f"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {len(logo_data)} >>\nstream\n".encode("ascii") + logo_data + b"\nendstream")
-    pdf = b"%PDF-1.4\n"
-    offsets = [0]
-    for index, obj in enumerate(objects, 1):
-        offsets.append(len(pdf))
-        pdf += f"{index} 0 obj\n".encode("ascii") + obj + b"\nendobj\n"
-    start = len(pdf)
-    pdf += f"xref\n0 {len(objects)+1}\n0000000000 65535 f \n".encode("ascii") + b"".join(f"{offset:010d} 00000 n \n".encode("ascii") for offset in offsets[1:]) + f"trailer << /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF".encode("ascii")
-    response = HttpResponse(pdf, content_type="application/pdf")
-    response["Content-Disposition"] = f'attachment; filename="receipt-{receipt.receipt_number}.pdf"'
-    return response
-
+    from .finance_documents import receipt_document_response
+    return receipt_document_response(receipt)
 
 class SchoolProfileView(APIView):
     permission_classes = [IsSchoolAdministrator]
@@ -715,6 +632,16 @@ class ParentViewSet(SchoolAdminViewSet):
     queryset = Parent.objects.all()
     school_lookup = "school"
 
+    @action(detail=True, methods=["post"], url_path="reset-password")
+    @transaction.atomic
+    def reset_password(self, request, pk=None):
+        from .credentials import reset_login
+        parent = self.get_object()
+        user = User.objects.select_for_update().get(pk=parent.user_id)
+        password = reset_login(user)
+        log_action(school=parent.school, actor=request.user, action="parent_password_reset", resource=parent)
+        return Response({"username": user.username, "temporary_password": password})
+
     def get_queryset(self):
         queryset = super().get_queryset().select_related("user").prefetch_related("student_links__student__school_class")
         query = self.request.query_params.get("q", "").strip()
@@ -745,7 +672,7 @@ class ParentViewSet(SchoolAdminViewSet):
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
         parent = Parent.objects.select_related("user").prefetch_related("student_links__student__school_class").get(pk=serializer.instance.pk)
-        return Response(ParentDetailSerializer(parent).data, status=201)
+        return Response({**ParentDetailSerializer(parent).data, "temporary_password": serializer.temporary_password}, status=201)
 
     def update(self, request, *args, **kwargs):
         parent = self.get_object()
@@ -955,7 +882,7 @@ class ExpenseViewSet(SchoolAdminViewSet):
         if category := self.request.query_params.get("category"):
             queryset = queryset.filter(category=category)
         if query := self.request.query_params.get("q", "").strip():
-            queryset = queryset.filter(Q(description__icontains=query) | Q(reference__icontains=query) | Q(notes__icontains=query))
+            queryset = queryset.filter(Q(description__icontains=query) | Q(reference__icontains=query) | Q(notes__icontains=query) | Q(payee__icontains=query))
         for param, lookup in (("start_date", "expense_date__gte"), ("end_date", "expense_date__lte")):
             if value := self.request.query_params.get(param):
                 parsed = parse_date(value)
@@ -1175,7 +1102,7 @@ def attendance_roster(*, school, school_class, academic_year, term, attendance_d
 
 
 class AttendanceRosterView(APIView):
-    permission_classes = [IsSchoolAdministrator]
+    permission_classes = [IsAcademicStaff]
 
     def get(self, request):
         required = ("school_class", "academic_year", "term", "attendance_date")
@@ -1184,7 +1111,8 @@ class AttendanceRosterView(APIView):
         attendance_date = parse_date(request.query_params["attendance_date"])
         if not attendance_date:
             raise ValidationError({"attendance_date": "Use YYYY-MM-DD."})
-        school = request.user.school_administrator.school
+        school = staff_school(request.user)
+        assigned_class(request.user, request.query_params["school_class"])
         school_class, academic_year, term = attendance_context(
             school=school,
             school_class_id=request.query_params["school_class"],
@@ -1196,12 +1124,14 @@ class AttendanceRosterView(APIView):
 
 
 class AttendanceBulkView(IdempotentCreateMixin, APIView):
-    permission_classes = [IsSchoolAdministrator]
+    permission_classes = [IsAcademicStaff]
 
     def get_school(self):
-        return self.request.user.school_administrator.school
+        return staff_school(self.request.user)
 
     def post(self, request):
+        request.body  # Cache the body before DRF parses it for replay hashing.
+        assigned_class(request.user, request.data.get("school_class"))
         return self.idempotent_create(request, lambda: self.post_once(request))
 
     @transaction.atomic
@@ -1210,6 +1140,7 @@ class AttendanceBulkView(IdempotentCreateMixin, APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         school = self.get_school()
+        assigned_class(request.user, data["school_class"])
         school_class, academic_year, term = attendance_context(
             school=school,
             school_class_id=data["school_class"],
@@ -1304,7 +1235,7 @@ class StudentFeeAssignmentViewSet(SchoolAdminViewSet):
         raise MethodNotAllowed("DELETE")
 
 
-class PaymentViewSet(SchoolAdminViewSet):
+class PaymentViewSet(IdempotentCreateMixin, SchoolAdminViewSet):
     queryset = Payment.objects.all()
     serializer_class = PaymentSerializer
     school_lookup = "student_fee_assignment__student__school_class__school"
@@ -1316,7 +1247,8 @@ class PaymentViewSet(SchoolAdminViewSet):
                 queryset = queryset.filter(**{lookup: value})
         return queryset.order_by("-paid_at", "-id")
 
-    def create(self, request, *args, **kwargs):
+    @transaction.atomic
+    def create_once(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         payment, receipt = record_payment(recorded_by=request.user, **serializer.validated_data)
@@ -1471,6 +1403,7 @@ def finance_summary(student):
     return {
         "student": {"id": student.id, "display_name": f"{student.first_name} {student.last_name}".strip(), "admission_number": student.admission_number, "class_name": student.school_class.name},
         "currency": student.school.default_currency,
+        "parent_invoice_access": student.school.document_settings.parent_invoice_access if hasattr(student.school, 'document_settings') else False,
         "total_charges": charges,
         "total_payments": payments,
         "outstanding_balance": balance,
@@ -1511,7 +1444,7 @@ class SchoolDailyCashbookView(APIView):
             is_reversed=False,
             paid_at__date=selected_date,
         ).select_related("student_fee_assignment__student__school_class", "student_fee_assignment__fee").order_by("paid_at", "id")
-        expenses = Expense.objects.filter(school=school, expense_date=selected_date).select_related("recorded_by")
+        expenses = Expense.objects.filter(school=school, expense_date=selected_date, is_reversed=False).select_related("recorded_by")
         income_total = sum((payment.amount for payment in payments), Decimal("0.00"))
         expense_total = sum((expense.amount for expense in expenses), Decimal("0.00"))
         return Response({
@@ -1602,6 +1535,28 @@ class ReportCardViewSet(ReportCardDownloadMixin, SchoolAdminViewSet):
     serializer_class = ReportCardSerializer
     school_lookup = "student_enrollment__school_class__school"
 
+    def perform_update(self, serializer):
+        if serializer.instance.is_published:
+            raise PermissionDenied("Published reports are locked. Reopen a result through the explicit correction workflow first.")
+        serializer.save()
+
+    def destroy(self, request, *args, **kwargs):
+        raise MethodNotAllowed("DELETE")
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def publish(self, request, pk=None):
+        School.objects.select_for_update().get(pk=self.get_school().pk)
+        card = self.get_object()
+        if AcademicResult.objects.filter(student_enrollment=card.student_enrollment, term=card.term).exclude(status="published").exists():
+            raise ValidationError("Publish all results for this learner and term first.")
+        card.is_published = True
+        card.save(update_fields=["is_published"])
+        from .academic_history import capture_publication
+        capture_publication(card, request)
+        log_action(school=self.get_school(), actor=request.user, action="report_card_published", resource=card)
+        return Response(self.get_serializer(card).data)
+
     def get_queryset(self):
         queryset = super().get_queryset().select_related(
             "student_enrollment__student",
@@ -1621,6 +1576,8 @@ class ReportCardViewSet(ReportCardDownloadMixin, SchoolAdminViewSet):
     @action(detail=True, methods=["post"], url_path="notify-parents")
     def notify_parents(self, request, *args, **kwargs):
         report_card = self.get_object()
+        if not report_card.is_published:
+            raise ValidationError("Publish the report card before notifying parents.")
         messages = create_report_card_messages(report_card)
         log_action(school=report_card.student_enrollment.student.school, actor=request.user, action="report_card_notified", resource=report_card, description=f"Created {len(messages)} communication record(s)")
         return Response({"report_card": report_card.id, "messages_created": len(messages)})
@@ -1672,13 +1629,13 @@ class ParentReceiptViewSet(ParentReadOnlyViewSet):
 
 
 class ParentAcademicResultViewSet(ParentReadOnlyViewSet):
-    queryset = AcademicResult.objects.all()
+    queryset = AcademicResult.objects.filter(status="published")
     serializer_class = ParentResultSerializer
     parent_lookup = "student_enrollment__student__parent_links__parent"
 
 
 class ParentReportCardViewSet(ReportCardDownloadMixin, ParentReadOnlyViewSet):
-    queryset = ReportCard.objects.all()
+    queryset = ReportCard.objects.filter(is_published=True)
     serializer_class = ParentReportCardSerializer
     parent_lookup = "student_enrollment__student__parent_links__parent"
 
@@ -1729,7 +1686,7 @@ class ParentHomeworkViewSet(HomeworkAttachmentActionsMixin, viewsets.ReadOnlyMod
         if not student_id:
             return Homework.objects.none()
         student = get_object_or_404(Student.objects.filter(parent_links__parent=parent).distinct(), pk=student_id)
-        queryset = Homework.objects.filter(school=parent.school, status=Homework.Status.PUBLISHED).select_related("school_class", "subject").prefetch_related("attachments")
+        queryset = Homework.objects.filter(school=parent.school, status__in=[Homework.Status.PUBLISHED, Homework.Status.CLOSED]).select_related("school_class", "subject").prefetch_related("attachments")
         if self.request.query_params.get("history", "false").lower() == "true":
             enrollment_match = StudentEnrollment.objects.filter(
                 student=student,
@@ -1904,14 +1861,23 @@ class PasswordChangeView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    @transaction.atomic
     def post(self, request):
         serializer = PasswordChangeSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-        user = request.user
+        user = User.objects.select_for_update().get(pk=request.user.pk)
         user.set_password(serializer.validated_data["new_password"])
         user.must_change_password = False
-        user.save(update_fields=["password", "must_change_password"])
-        return Response({"detail": "Password changed successfully."})
+        user.token_version += 1
+        user.save(update_fields=["password", "must_change_password", "token_version"])
+        from .authentication import MTMTokenObtainPairSerializer
+        refresh = MTMTokenObtainPairSerializer.get_token(user)
+        school = None
+        for profile in ("teacher_profile", "parent_profile", "school_administrator"):
+            if hasattr(user, profile):
+                school = getattr(user, profile).school
+        log_action(school=school, actor=user, action="password_changed", resource=user)
+        return Response({"detail": "Password changed successfully.", "access": str(refresh.access_token), "refresh": str(refresh)})
 
 
 class CurrentUserView(APIView):

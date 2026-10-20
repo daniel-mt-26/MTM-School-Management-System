@@ -116,6 +116,7 @@ if MAILER_BACKEND == "django.core.mail.backends.smtp.EmailBackend":
 if IS_PRODUCTION and MAILER_BACKEND == "django.core.mail.backends.console.EmailBackend":
     raise RuntimeError("DJANGO_EMAIL_BACKEND must not use the console backend in production.")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", os.getenv("EMAIL_HOST_USER", "") or "webmaster@localhost")
+MTM_PASSWORD_RESET_ORIGIN = os.getenv("MTM_PASSWORD_RESET_ORIGIN", "http://localhost:5173")
 
 # n8n uses this server-to-server credential; it is never sent to React or
 # stored in the database. A blank value deliberately disables integration APIs.

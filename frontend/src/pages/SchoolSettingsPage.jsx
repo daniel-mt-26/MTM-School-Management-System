@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { getSchoolProfile, updateSchoolProfile } from '../api/school'
+import DocumentSettingsPanel from '../components/DocumentSettingsPanel'
 
 const MAX_LOGO_SIZE = 2 * 1024 * 1024
 
@@ -119,6 +120,7 @@ function SchoolSettingsPage() {
           <Link to="/school" className="settings-cancel">Cancel</Link>
         </div>
       </form>
+      <DocumentSettingsPanel />
     </main>
   )
 }

@@ -1,5 +1,7 @@
 from .intake_api import PublicApplication, PublicEnquiry, SchoolApplications, SchoolEnquiries
 from .reporting_api import AttendanceHistoryView, SchoolAccountStatementView, ParentAccountStatementView
+from .finance_documents import DocumentSettingsView, DebtorsView, InvoiceView
+from .academic_history import AcademicHistoryView
 from .academics_api import TimetableViewSet
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
@@ -73,6 +75,22 @@ from .views import (
 )
 
 router = DefaultRouter()
+from .staff_api import TeacherManagement, TeacherLookups, TeacherStudents, TeacherHomework, ResultWorkflow, TeacherComments, StaffAnnouncements, TeacherResources, TeacherTimetable
+from .password_recovery import ForgotPassword, ResetPassword
+from .school_finance_api import (SchoolFinancialReportView, FinanceLookupsView, FinanceConfigurationViewSet,
+    FinanceCategoryViewSet, OtherIncomeViewSet, SchoolExpenseViewSet, FinancialReportNoteView)
+from .attendance_register import AttendanceRegister
+from .staff_api import TeacherCatalog
+router.register("school/teachers", TeacherManagement, basename="school-teacher")
+router.register("teacher/students", TeacherStudents, basename="teacher-student")
+router.register("teacher/homework", TeacherHomework, basename="teacher-homework")
+router.register("teacher/results", ResultWorkflow, basename="teacher-result")
+router.register("school/result-review", ResultWorkflow, basename="school-result-review")
+router.register("teacher/comments", TeacherComments, basename="teacher-comment")
+router.register("teacher/announcements", StaffAnnouncements, basename="teacher-announcement")
+router.register("school/teacher-announcements", StaffAnnouncements, basename="school-teacher-announcement")
+router.register("teacher/resources", TeacherResources, basename="teacher-resource")
+router.register("teacher/timetable", TeacherTimetable, basename="teacher-timetable")
 router.register("school/applications", SchoolApplications, basename="school-application")
 router.register("school/enquiries", SchoolEnquiries, basename="school-enquiry")
 router.register("platform/schools", PlatformSchoolViewSet, basename="platform-school")
@@ -85,13 +103,16 @@ router.register("school/subjects", SubjectViewSet, basename="school-subject")
 router.register("school/class-subjects", ClassSubjectViewSet, basename="school-class-subject")
 router.register("school/enrollments", StudentEnrollmentViewSet, basename="school-enrollment")
 router.register("school/fees", FeeViewSet, basename="school-fee")
-router.register("school/expenses", ExpenseViewSet, basename="school-expense")
+router.register("school/expenses", SchoolExpenseViewSet, basename="school-expense")
+router.register("school/finance/accounts", FinanceConfigurationViewSet, basename="school-finance-account")
+router.register("school/finance/categories", FinanceCategoryViewSet, basename="school-finance-category")
+router.register("school/finance/other-income", OtherIncomeViewSet, basename="school-other-income")
 router.register("school/fee-assignments", StudentFeeAssignmentViewSet, basename="school-fee-assignment")
 router.register("school/payments", PaymentViewSet, basename="school-payment")
 router.register("school/ledger", FinancialLedgerEntryViewSet, basename="school-ledger")
 router.register("school/receipts", ReceiptViewSet, basename="school-receipt")
 router.register("school/recurring-fees", RecurringFeeTemplateViewSet, basename="school-recurring-fee")
-router.register("school/results", AcademicResultViewSet, basename="school-result")
+router.register("school/results", ResultWorkflow, basename="school-result")
 router.register("school/report-cards", ReportCardViewSet, basename="school-report-card")
 router.register("school/notifications", NotificationViewSet, basename="school-notification")
 router.register("school/communication/announcements", AnnouncementViewSet, basename="school-announcement")
@@ -114,6 +135,24 @@ router.register("parent/notifications", ParentNotificationViewSet, basename="par
 router.register("parent/homework", ParentHomeworkViewSet, basename="parent-homework")
 
 urlpatterns = [
+    path('school/finance/lookups/', FinanceLookupsView.as_view()),
+    path('school/finance/report-notes/', FinancialReportNoteView.as_view()),
+    path('school/finance/reports/<str:report>/', SchoolFinancialReportView.as_view()),
+    path("school/document-settings/", DocumentSettingsView.as_view()),
+    path("school/finance/ageing/", DebtorsView.as_view()),
+    path("school/finance/outstanding/", DebtorsView.as_view(), {'outstanding': True}),
+    path("school/finance/invoices/", InvoiceView.as_view()),
+    path("school/finance/invoices/<int:invoice_id>/", InvoiceView.as_view()),
+    path("parent/invoices/", InvoiceView.as_view()),
+    path("parent/invoices/<int:invoice_id>/", InvoiceView.as_view()),
+    path("school/students/<int:student_id>/academic-history/", AcademicHistoryView.as_view()),
+    path("teacher/students/<int:student_id>/academic-history/", AcademicHistoryView.as_view()),
+    path("parent/students/<int:student_id>/academic-history/", AcademicHistoryView.as_view()),
+    path("teacher/catalog/<str:resource>/", TeacherCatalog.as_view()),
+    path("school/attendance/register/", AttendanceRegister.as_view()),
+    path("teacher/lookups/", TeacherLookups.as_view()),
+    path("auth/forgot-password/", ForgotPassword.as_view()),
+    path("auth/reset-password/", ResetPassword.as_view()),
     path("public/beavers/applications/", PublicApplication.as_view(), name="beavers-applications"),
     path("public/beavers/enquiries/", PublicEnquiry.as_view(), name="beavers-enquiries"),
     path("school/attendance/history/", AttendanceHistoryView.as_view()),

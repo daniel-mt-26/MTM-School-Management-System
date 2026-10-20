@@ -1,3 +1,4 @@
+import SortableTable from '../components/SortableTable.jsx'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -53,7 +54,7 @@ function StudentsPage() {
       {loading ? <p className="student-state">Loading students…</p> : (
         students.length === 0 ? <p className="student-state">No students match the current filters.</p> : (
           <div className="student-table-wrap">
-            <table className="student-table">
+            <SortableTable className="student-table">
               <thead><tr><th>Admission Number</th><th>Student Name</th><th>Class</th><th>Status</th><th>Actions</th></tr></thead>
               <tbody>{students.map((student) => (
                 <tr key={student.id}>
@@ -62,7 +63,7 @@ function StudentsPage() {
                   <td><Link to={`/school/students/${student.id}`}>View</Link></td>
                 </tr>
               ))}</tbody>
-            </table>
+            </SortableTable>
           </div>
         )
       )}

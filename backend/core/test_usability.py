@@ -103,6 +103,12 @@ class UsabilityTests(APITestCase):
         reverse_payment(payment_id=self.payment_a.pk, reversed_by=self.admin_a, reason='Correction')
         data = self.statement(date_from='2026-02-01', academic_year=self.year_a.pk, term=self.term_a.pk).data
         self.assertEqual(data['summary']['opening_balance'], Decimal('75'))
+        self.assertEqual(data['summary']['closing_balance'], Decimal('75'))
+        self.assertEqual(len(data['transactions']), 0)
+        # The selected term ends before this later reversal. Full-history/custom
+        # dates retain the reversal on its actual transaction date.
+        data = self.statement(date_from='2026-02-01').data
+        self.assertEqual(data['summary']['opening_balance'], Decimal('75'))
         self.assertEqual(data['summary']['closing_balance'], Decimal('100'))
         self.assertEqual(data['summary']['adjustments_reversals'], Decimal('25'))
         self.assertEqual(len(data['transactions']), 1)

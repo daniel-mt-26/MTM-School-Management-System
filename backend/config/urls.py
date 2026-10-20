@@ -28,6 +28,9 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('core.urls')),
     path('media/homework/<path:path>', deny_private_homework_media),
+    path('media/protected_resources/<path:path>', deny_private_homework_media),
+    path('media/report_cards/<path:path>', deny_private_homework_media),
+    path('media/finance_documents/<path:path>', deny_private_homework_media),
 ]
 
 if settings.DEBUG:

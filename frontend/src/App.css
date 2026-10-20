@@ -488,6 +488,17 @@ a:focus-visible, button:focus-visible { outline: 3px solid #d68b00; outline-offs
 .statement-letterhead { border-bottom: 2px solid #182331; padding-bottom: 1rem; }
 .statement-letterhead img { max-width: 120px; max-height: 100px; float: right; }
 .statement-letterhead p { white-space: pre-line; margin: .3rem 0; }
+.statement-letterhead img { float: left; margin: 0 1.5rem 1rem 0; object-fit: contain; }
+.statement-letterhead { display: flow-root; }
+.invoice-information { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin: 1.5rem 0; }
+.invoice-number { font-size: 1.7rem; color: #244768; }
+.statement-document td { overflow-wrap: anywhere; }
+.academic-history-period { margin-top: 2rem; }
+.school-financial-page .finance-summary { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.school-financial-page .statement-document td { vertical-align: top; }
+.school-financial-page .statement-document h2 { break-after: avoid; }
+.report-notes { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 650px) { .invoice-information { grid-template-columns: 1fr; gap: 0; } .statement-document { padding: 1rem; } }
 .statement-totals { max-width: 480px; margin-left: auto; }
 .statement-totals div { display: flex; justify-content: space-between; gap: 2rem; padding: .4rem; }
 .account-statement td:nth-last-child(-n+3) { text-align: right; white-space: nowrap; }
@@ -512,3 +523,63 @@ a:focus-visible, button:focus-visible { outline: 3px solid #d68b00; outline-offs
 .subject-suggestions [role="option"] { padding: 10px 12px; cursor: pointer; color: #243247; }
 .subject-suggestions [role="option"][aria-selected="true"], .subject-suggestions [role="option"]:hover { background: #1755a0; color: white; }
 .subject-suggestions small { display: block; }
+
+/* Intake views reuse existing school layout; records are online-only. */
+.intake-filters label { display: grid; gap: 6px; font-weight: 600; }
+.intake-filters button { align-self: end; }
+.intake-help { width: min(100%, 1100px); margin: 0 auto 18px; }
+.intake-table caption { padding: 14px 18px; text-align: left; color: #374151; }
+.intake-table td { max-width: 260px; overflow-wrap: anywhere; }
+.intake-reference, .intake-copy { overflow-wrap: anywhere; white-space: pre-wrap; }
+.intake-status.pending, .intake-status.new { color: #1e40af; background: #dbeafe; }
+.intake-status.approved, .intake-status.resolved { color: #166534; background: #dcfce7; }
+.intake-status.rejected { color: #991b1b; background: #fee2e2; }
+.intake-status.in_progress { color: #854d0e; background: #fef9c3; }
+.intake-pagination { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px; max-width: 1100px; margin: 20px auto; }
+.intake-review { display: grid; gap: 12px; }
+.intake-review label { display: grid; gap: 7px; font-weight: 600; }
+.intake-review select, .intake-review textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 11px 12px; border: 1px solid #aeb9ca; border-radius: 6px; font: inherit; background: #fff; }
+.intake-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.intake-actions button { margin: 0; }
+.intake-dialog { box-sizing: border-box; width: min(520px, calc(100% - 28px)); max-height: calc(100dvh - 40px); overflow: auto; padding: 24px; border: 1px solid #dce3ee; border-radius: 12px; color: #1f2937; background: #fff; }
+.intake-dialog::backdrop { background: rgb(17 24 39 / 55%); }
+.intake-history article { padding-block: 16px; border-bottom: 1px solid #e5e7eb; }
+.intake-history h3 { margin: 0; font-size: 1rem; }
+.intake-page :focus-visible, .intake-dialog :focus-visible { outline: 3px solid #2457a5; outline-offset: 3px; }
+@media (max-width: 600px) { .intake-filters { grid-template-columns: 1fr; } .intake-actions button { width: 100%; } .intake-page .detail-grid { grid-template-columns: 1fr; } .intake-page .profile-section { padding: 20px 16px; } }
+.teacher-portal { display: flex; min-height: 100vh; }
+.teacher-sidebar { width: 240px; padding: 24px; background: #122d42; color: white; flex-shrink: 0; }
+.teacher-sidebar nav { display: grid; gap: 10px; margin: 20px 0; }
+.teacher-sidebar a { color: #e4edf5; }
+.teacher-sidebar [aria-current="page"] { font-weight: 700; text-decoration: underline; }
+.teacher-content { padding: 24px; min-width: 0; flex: 1; }
+.teacher-admin-links { display: flex; gap: 18px; padding: 12px 24px; flex-wrap: wrap; }
+.mds-attribution, .mds-attribution:visited { display: inline-block; font-size: 12px; color: #607689; margin-top: 16px; }
+.teacher-sidebar .mds-attribution { color: #cbd9e3; }
+.app-attribution { padding: 4px 24px 16px; }
+.sort-heading { padding: 0; background: transparent; color: inherit; font: inherit; border: 0; text-align: left; cursor: pointer; }
+.session-warning { position: fixed; inset: auto 24px 24px auto; z-index: 10000; max-width: 420px; padding: 24px; background: white; border: 2px solid #254d6b; box-shadow: 0 8px 32px #0004; }
+.register-scroll { overflow-x: auto; }
+.register-actions { display: flex; gap: 8px; margin: 16px 0; }
+.attendance-code { text-align: center; }
+.code-P { background: #e5f3e9; color: #235b35; }
+.code-A { background: #fae7e7; color: #8a2727; }
+.code-L { background: #fff3d7; color: #735813; }
+.code-E { background: #e6edf5; color: #325472; }
+@media (max-width: 700px) { .teacher-portal { display: block; } .teacher-sidebar { width: auto; } .teacher-sidebar nav { grid-template-columns: repeat(2, 1fr); } }
+@media print { body * { visibility: hidden; } .attendance-register, .attendance-register * { visibility: visible; } .attendance-register { position: absolute; inset: 0; font-size: 8px; } .attendance-register .academic-filters, .register-actions { display: none; } .register-scroll { overflow: visible; } .attendance-register table { width: 100%; } .attendance-register th, .attendance-register td { padding: 2px; } }
+@media print {
+  @page { size: A4; margin: 12mm; }
+  body:has(.statement-document) .statement-document, body:has(.statement-document) .statement-document * { visibility: visible; }
+  .statement-document { position: absolute; inset: 0; padding: 0; width: 100%; font-size: 9pt; }
+  .statement-document .student-table-wrap { overflow: visible; }
+  .statement-document table { width: 100%; min-width: 0; table-layout: fixed; }
+  .statement-document th, .statement-document td { white-space: normal !important; padding: 5px; }
+  .statement-document thead { display: table-header-group; }
+  .statement-document tfoot { display: table-row-group; }
+  .statement-document tr, .statement-document .statement-totals, .statement-letterhead { break-inside: avoid; }
+  .statement-document tbody tr:last-child { break-after: avoid; }
+  .statement-controls { display: none !important; }
+  .statement-document button { display: none; }
+  .statement-document .sort-heading { display: inline !important; padding: 0; border: 0; background: none; }
+}

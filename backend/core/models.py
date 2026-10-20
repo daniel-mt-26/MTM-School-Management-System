@@ -16,6 +16,7 @@ class User(AbstractUser):
     class Role(models.TextChoices):
         PLATFORM_ADMIN = "platform_admin", "MTM System Administrator"
         SCHOOL_ADMIN = "school_admin", "School Administrator / Receptionist"
+        TEACHER = "teacher", "Teacher"
         PARENT = "parent", "Parent / Guardian"
 
     role = models.CharField(max_length=20, choices=Role.choices)
@@ -60,6 +61,32 @@ class SchoolAdministrator(models.Model):
     def clean(self):
         if self.user.role != User.Role.SCHOOL_ADMIN:
             raise ValidationError({"user": "A school administrator must have the school_admin role."})
+
+
+class Teacher(models.Model):
+    user = models.OneToOneField(User, on_delete=models.PROTECT, related_name="teacher_profile")
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="teachers")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def clean(self):
+        if self.user.role != User.Role.TEACHER:
+            raise ValidationError({"user": "A teacher must have the teacher role."})
+
+
+class TeacherAssignment(models.Model):
+    teacher = models.ForeignKey(Teacher, on_delete=models.PROTECT, related_name="assignments")
+    school_class = models.ForeignKey("SchoolClass", on_delete=models.PROTECT, related_name="teacher_assignments")
+    subjects = models.ManyToManyField("ClassSubject", blank=True, related_name="teacher_assignments")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["teacher", "school_class"], name="unique_teacher_class_assignment")]
+
+    def clean(self):
+        if self.teacher.school_id != self.school_class.school_id:
+            raise ValidationError("Teacher and class must belong to the same school.")
 
 
 class Parent(models.Model):
@@ -314,6 +341,7 @@ class Homework(models.Model):
     class Status(models.TextChoices):
         DRAFT = "draft", "Draft"
         PUBLISHED = "published", "Published"
+        CLOSED = "closed", "Closed"
 
     school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="homework")
     school_class = models.ForeignKey(SchoolClass, on_delete=models.PROTECT, related_name="homework")
@@ -339,9 +367,10 @@ class Homework(models.Model):
             raise ValidationError({"subject": "The subject must belong to the homework school."})
         if self.created_by_id:
             try:
-                administrator_school_id = self.created_by.school_administrator.school_id
-            except SchoolAdministrator.DoesNotExist:
-                raise ValidationError({"created_by": "Homework must be created by a school administrator."})
+                profile = self.created_by.teacher_profile if self.created_by.role == User.Role.TEACHER else self.created_by.school_administrator
+                administrator_school_id = profile.school_id
+            except (SchoolAdministrator.DoesNotExist, Teacher.DoesNotExist):
+                raise ValidationError({"created_by": "Homework requires a school staff account."})
             if self.school_id != administrator_school_id:
                 raise ValidationError({"created_by": "The administrator must belong to the homework school."})
         if self.date_assigned and self.due_date and self.due_date < self.date_assigned:
@@ -430,6 +459,8 @@ class StudentFeeAssignment(models.Model):
 
 
 class Payment(models.Model):
+    account = models.ForeignKey('FinanceAccount', on_delete=models.PROTECT, null=True, blank=True, related_name='payments')
+    income_category = models.ForeignKey('FinanceCategory', on_delete=models.PROTECT, null=True, blank=True, related_name='payments')
     student_fee_assignment = models.ForeignKey(StudentFeeAssignment, on_delete=models.PROTECT, related_name="payments")
     amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))])
     currency = models.CharField(max_length=3, default="USD")
@@ -527,6 +558,13 @@ class Expense(models.Model):
         OTHER = "other", "Other"
 
     school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="expenses")
+    account = models.ForeignKey('FinanceAccount', on_delete=models.PROTECT, null=True, blank=True, related_name='expenses')
+    finance_category = models.ForeignKey('FinanceCategory', on_delete=models.PROTECT, null=True, blank=True, related_name='expenses')
+    payee = models.CharField(max_length=150, blank=True)
+    is_reversed = models.BooleanField(default=False)
+    reversed_at = models.DateTimeField(null=True, blank=True)
+    reversed_by = models.ForeignKey(User, on_delete=models.PROTECT, null=True, blank=True, related_name='reversed_expenses')
+    reversal_reason = models.TextField(blank=True)
     expense_date = models.DateField()
     category = models.CharField(max_length=30, choices=Category.choices)
     description = models.CharField(max_length=255)
@@ -546,6 +584,85 @@ class Expense(models.Model):
     def clean(self):
         if self.school_id and self.currency != self.school.default_currency:
             raise ValidationError({"currency": "Expenses must use the school's default currency."})
+        if self.account_id and self.account.school_id != self.school_id:
+            raise ValidationError({'account': 'Choose an account belonging to this school.'})
+        if self.finance_category_id and (self.finance_category.school_id != self.school_id or self.finance_category.kind != 'expense'):
+            raise ValidationError({'finance_category': 'Choose an expense category belonging to this school.'})
+
+
+class FinanceAccount(models.Model):
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name='finance_accounts')
+    name = models.CharField(max_length=100)
+    kind = models.CharField(max_length=10, choices=[('cash', 'Cash'), ('bank', 'Bank'), ('other', 'Other')])
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['school', 'name'], name='unique_finance_account_name')]
+
+
+class FinanceCategory(models.Model):
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name='finance_categories')
+    name = models.CharField(max_length=100)
+    kind = models.CharField(max_length=10, choices=[('income', 'Income'), ('expense', 'Expense')])
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['school', 'kind', 'name'], name='unique_school_finance_category')]
+
+
+class ManualIncome(models.Model):
+    """Non-student receipts only; student money is always canonical Payment."""
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name='manual_income')
+    income_date = models.DateField()
+    source = models.CharField(max_length=150)
+    description = models.CharField(max_length=255)
+    category = models.ForeignKey(FinanceCategory, on_delete=models.PROTECT, null=True, blank=True, related_name='manual_income')
+    account = models.ForeignKey(FinanceAccount, on_delete=models.PROTECT, null=True, blank=True, related_name='manual_income')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal('0.01'))])
+    currency = models.CharField(max_length=3)
+    payment_method = models.CharField(max_length=30)
+    reference = models.CharField(max_length=100, blank=True)
+    notes = models.TextField(blank=True)
+    recorded_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name='recorded_other_income')
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_reversed = models.BooleanField(default=False)
+    reversed_at = models.DateTimeField(null=True, blank=True)
+    reversed_by = models.ForeignKey(User, on_delete=models.PROTECT, null=True, blank=True, related_name='reversed_other_income')
+    reversal_reason = models.TextField(blank=True)
+
+
+class ExpenseRevision(models.Model):
+    expense = models.ForeignKey(Expense, on_delete=models.PROTECT, related_name='revisions')
+    snapshot = models.JSONField()
+    actor = models.ForeignKey(User, on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+def expense_attachment_path(instance, filename):
+    from pathlib import Path
+    return f'finance_documents/{instance.expense.school_id}/{uuid.uuid4().hex}{Path(filename).suffix.lower()}'
+
+
+class ExpenseAttachment(models.Model):
+    expense = models.ForeignKey(Expense, on_delete=models.PROTECT, related_name='attachments')
+    file = models.FileField(upload_to=expense_attachment_path)
+    original_name = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=100)
+    size = models.PositiveIntegerField()
+    uploaded_by = models.ForeignKey(User, on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class FinancialReportNote(models.Model):
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name='financial_report_notes')
+    start_date = models.DateField()
+    end_date = models.DateField()
+    body = models.TextField(blank=True)
+    updated_by = models.ForeignKey(User, on_delete=models.PROTECT)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['school', 'start_date', 'end_date'], name='unique_school_report_period_note')]
 
 
 class InventoryCategory(models.Model):
@@ -677,6 +794,9 @@ class IdempotencyRecord(models.Model):
 
 
 class AcademicResult(models.Model):
+    official_grade = models.CharField(max_length=30, blank=True)
+    grading_snapshot = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=12, choices=[("draft", "Draft"), ("submitted", "Submitted"), ("approved", "Approved"), ("published", "Published")], default="published")
     student_enrollment = models.ForeignKey(StudentEnrollment, on_delete=models.PROTECT, related_name="results")
     term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="results")
     class_subject = models.ForeignKey(ClassSubject, on_delete=models.PROTECT, related_name="results")
@@ -700,6 +820,7 @@ class AcademicResult(models.Model):
 
 
 class ReportCard(models.Model):
+    is_published = models.BooleanField(default=True)
     student_enrollment = models.ForeignKey(StudentEnrollment, on_delete=models.PROTECT, related_name="report_cards")
     term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="report_cards")
     generated_at = models.DateTimeField(auto_now_add=True)
@@ -711,6 +832,108 @@ class ReportCard(models.Model):
     def clean(self):
         if self.term.academic_year_id != self.student_enrollment.academic_year_id:
             raise ValidationError("Report-card term and enrollment must belong to the same academic year.")
+
+
+class SchoolDocumentSettings(models.Model):
+    school = models.OneToOneField(School, on_delete=models.PROTECT, related_name="document_settings")
+    motto = models.CharField(max_length=255, blank=True)
+    website = models.URLField(blank=True)
+    additional_contacts = models.CharField(max_length=255, blank=True)
+    contact_person = models.CharField(max_length=150, blank=True)
+    brand_color = models.CharField(max_length=7, default="#244768", validators=[RegexValidator(r"^#[0-9a-fA-F]{6}$")])
+    parent_invoice_access = models.BooleanField(default=False)
+    # Optional, school-defined [{minimum: '80', grade: 'A'}, ...]. No default scale.
+    grading_scale = models.JSONField(default=list, blank=True)
+
+
+class SchoolInvoiceSequence(models.Model):
+    school = models.OneToOneField(School, on_delete=models.PROTECT, related_name="invoice_sequence")
+    next_number = models.PositiveBigIntegerField(default=1)
+
+
+class StudentInvoice(models.Model):
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="student_invoices")
+    assignment = models.OneToOneField(StudentFeeAssignment, on_delete=models.PROTECT, related_name="invoice")
+    number = models.CharField(max_length=50)
+    issued_on = models.DateField()
+    due_date = models.DateField()
+    currency = models.CharField(max_length=3)
+    total = models.DecimalField(max_digits=12, decimal_places=2)
+    snapshot = models.JSONField()
+    generated_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="generated_invoices")
+    generated_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["school", "number"], name="unique_invoice_number_per_school")]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError("Official invoices are immutable.")
+        if self.assignment.student.school_id != self.school_id or self.assignment.fee.school_id != self.school_id:
+            raise ValidationError("Invoice and obligation must belong to the same school.")
+        return super().save(*args, **kwargs)
+
+
+class ReportCardPublication(models.Model):
+    report_card = models.ForeignKey(ReportCard, on_delete=models.PROTECT, related_name="publications")
+    version = models.PositiveIntegerField()
+    snapshot = models.JSONField()
+    published_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["report_card", "version"], name="unique_report_publication_version")]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError("Published academic snapshots are immutable.")
+        return super().save(*args, **kwargs)
+
+
+class ReportComment(models.Model):
+    teacher = models.ForeignKey(Teacher, on_delete=models.PROTECT, related_name="report_comments")
+    enrollment = models.ForeignKey(StudentEnrollment, on_delete=models.PROTECT, related_name="teacher_comments")
+    term = models.ForeignKey(Term, on_delete=models.PROTECT)
+    comment = models.TextField()
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["teacher", "enrollment", "term"], name="unique_teacher_report_comment")]
+
+
+class ResultRevision(models.Model):
+    result = models.ForeignKey(AcademicResult, on_delete=models.PROTECT, related_name="revisions")
+    actor = models.ForeignKey(User, on_delete=models.PROTECT)
+    reason = models.TextField()
+    snapshot = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class StaffAnnouncement(models.Model):
+    school = models.ForeignKey(School, on_delete=models.PROTECT)
+    author = models.ForeignKey(User, on_delete=models.PROTECT)
+    title = models.CharField(max_length=200)
+    message = models.TextField()
+    teachers = models.ManyToManyField(Teacher, blank=True)
+    classes = models.ManyToManyField(SchoolClass, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class TeachingResource(models.Model):
+    teacher = models.ForeignKey(Teacher, on_delete=models.PROTECT)
+    school_class = models.ForeignKey(SchoolClass, on_delete=models.PROTECT)
+    class_subject = models.ForeignKey(ClassSubject, on_delete=models.PROTECT, null=True, blank=True)
+    title = models.CharField(max_length=200)
+    file = models.FileField(upload_to="protected_resources/", max_length=500)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class PasswordRecovery(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    digest = models.CharField(max_length=64, unique=True)
+    token_version = models.PositiveIntegerField(default=1)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
 
 class Notification(models.Model):
@@ -869,7 +1092,7 @@ class CommunicationMessage(models.Model):
 class AuditLog(models.Model):
     """Append-only, safe operational audit events; never store request bodies or secrets."""
 
-    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="audit_logs")
+    school = models.ForeignKey(School, on_delete=models.PROTECT, related_name="audit_logs", null=True, blank=True)
     actor = models.ForeignKey(User, on_delete=models.PROTECT, related_name="audit_logs", null=True, blank=True)
     action = models.CharField(max_length=100)
     resource_type = models.CharField(max_length=100)

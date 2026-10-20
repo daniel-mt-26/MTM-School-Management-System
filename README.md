@@ -2224,6 +2224,29 @@ n8n provides the external communication automation layer.
 
 The application is currently in **deployment preparation** and is not yet considered fully production deployed.
 
+## Demo data seeding
+
+Create the synthetic Sunrise tenant with `python manage.py create_demo_school`.
+Existing marked demo schools require explicit `seed_demo_school --school "Sunrise Primary School" --yes` confirmation.
+See [Demo seeding and walkthrough](docs/DEMO_SEEDING.md) for safe reset, verification, credentials and feature coverage.
+
+## Finance management
+
+School Admin Finance has two groups:
+
+- **Student Fee Management:** Fee Structures, Student Charges, Payments, Receipts, Invoices, Student Financial Statements, Outstanding Balances and Ageing Debtors.
+- **School Financial Management:** Income Records, Expenses, Cash Books, Monthly Financial Reports, Annual Financial Reports and Financial Dashboard. Cash Received and Expense reports provide transaction-level exports; Accounts and Categories configure cash/bank classifications.
+
+**Bank Reconciliation = FUTURE.** Account balances currently describe recorded cash movements, not reconciled bank statements.
+
+Billed fees, actual cash collected and outstanding receivables are separate. Existing payments feed school income and cashbook reports by reference; report generation does not create payments or duplicate ledger entries. Opening balances include earlier matching movements. Reversals preserve the original transaction and offset it on the correction date, so monthly figures reconcile to annual figures. Historical class context comes from enrollment during the billed obligation.
+
+Budget and variance columns are hidden because no budget is configured. Reports support branded PDF, numeric Excel and print. The application database must be migrated through the existing prerequisites and new additive migrations before runtime use.
+
+See the [Student documents and academic history report](docs/STUDENT_DOCUMENTS_ACADEMIC_HISTORY_REPORT.md) and [School Financial Management implementation report](docs/SCHOOL_FINANCIAL_MANAGEMENT_REPORT.md) for architecture, access rules, migration status and validation.
+
 ## Online admissions and contact enquiries (Phase 1)
+
+Teacher Portal implementation, additive migrations, credential recovery and verification are documented in [Teacher Portal batch report](docs/TEACHER_PORTAL_BATCH_REPORT.md). Planned staff features are listed in the [Teacher Portal roadmap](docs/TEACHER_PORTAL_ROADMAP.md).
 
 The secure intake API is implemented but disabled by default. See [Phase 1 implementation and operations](docs/INTAKE_BACKEND_PHASE1.md) and backend/.env.intake.example for migration, tenant/privacy, origin, anti-spam, retention and email prerequisites. No automatic learner enrolment or website/dashboard connection is provided in this phase.

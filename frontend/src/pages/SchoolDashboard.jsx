@@ -97,7 +97,7 @@ function SchoolDashboard() {
   }
 
   return (
-    <div className="school-dashboard">
+    <div className="school-dashboard"><div className="teacher-admin-links"><Link to="/school/teachers">Teachers</Link><Link to="/school/teacher-announcements">Teacher Announcements</Link><Link to="/school/result-review">Results Approval</Link></div>
       <header className="school-header">
         <div className="school-identity">
           {school.logo ? (
@@ -177,6 +177,17 @@ function SchoolDashboard() {
           <Link to="/school/communication" className="dashboard-card">
             <h2>Communication</h2>
             <p>Notifications and school communication.</p>
+          </Link>
+
+          <Link to="/school/admissions" className="dashboard-card">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M8 4H5v17h14V4h-3M8 3h8v4H8zM8 12h8M8 16h5" /></svg>
+            <h2>Admissions</h2>
+            <p>Review online applications and internal review history.</p>
+          </Link>
+          <Link to="/school/enquiries" className="dashboard-card">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M3 4h18v13H8l-5 4zM7 8h10M7 12h7" /></svg>
+            <h2>Enquiries</h2>
+            <p>Manage contact enquiries, handling notes and status.</p>
           </Link>
 
           <Link to="/school/settings" className="dashboard-card">

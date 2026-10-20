@@ -189,6 +189,7 @@ class ProvisionSchoolTests(APITestCase):
             "current_password": self.password, "new_password": secrets.token_urlsafe(32),
         })
         self.assertEqual(changed.status_code, 200)
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + changed.data["access"])
         self.assertEqual(self.client.get("/api/school/profile/", {"school_id": other.pk}).data["name"], own.name)
         for endpoint, foreign, expected_ids in (
             ("classes", other_class, list(own.classes.values_list("pk", flat=True))),

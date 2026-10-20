@@ -1,10 +1,12 @@
 """Small, tenant-safe replay support for queued client mutations."""
 
 from hashlib import sha256
+from json import loads
 from uuid import UUID
 
 from django.db import IntegrityError, transaction
 from rest_framework.response import Response
+from rest_framework.renderers import JSONRenderer
 
 from .models import IdempotencyRecord
 
@@ -38,21 +40,22 @@ class IdempotentCreateMixin:
 
         with transaction.atomic():
             try:
-                record = IdempotencyRecord.objects.create(
-                    school=school,
-                    actor=actor,
-                    operation_id=operation_id,
-                    request_method=request.method,
-                    request_path=request.path,
-                    payload_hash=payload_hash,
-                    response_status=200,
-                )
+                # A savepoint keeps the outer transaction usable after a
+                # concurrent request wins this unique operation key.
+                with transaction.atomic():
+                    record = IdempotencyRecord.objects.create(
+                        school=school, actor=actor, operation_id=operation_id,
+                        request_method=request.method, request_path=request.path,
+                        payload_hash=payload_hash, response_status=200,
+                    )
             except IntegrityError:
                 existing = IdempotencyRecord.objects.get(school=school, actor=actor, operation_id=operation_id)
                 return self.replay_or_reject(existing, request, payload_hash)
             response = create_once()
             record.response_status = response.status_code
-            record.response_body = response.data
+            # Persist the actual JSON representation, including Decimal/date
+            # values returned by serializer method fields.
+            record.response_body = loads(JSONRenderer().render(response.data))
             record.save(update_fields=["response_status", "response_body"])
             return response
 

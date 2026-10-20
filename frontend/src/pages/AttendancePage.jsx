@@ -3,17 +3,18 @@ import { Link } from 'react-router-dom'
 import { getAcademicRecords } from '../api/academics'
 import { getAttendanceRoster, saveAttendanceBulk } from '../api/attendance'
 import { OfflineContext } from '../offline/context'
-import AttendanceHistory from '../components/AttendanceHistory'
+import AttendanceHistory, { MonthlyAttendanceRegister } from '../components/AttendanceHistory'
 import { AttendanceClassList, AttendanceRoster } from '../components/AttendanceControls'
 import { cacheAttendanceLookups, cachedAttendanceLookups, cachedAttendanceRoster, cacheAttendanceRoster, queueAttendanceBulk, attendanceWithLocalChanges } from '../offline/attendance'
 import { discardOperation, syncMetadata, updateOperation } from '../offline/db'
 
 const schoolDate = () => { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` }
 
-export default function AttendancePage() {
+export default function AttendancePage({ teacher = false }) {
   const offline = useContext(OfflineContext)
   const { scope, isReachable, queue = [], refresh, syncNow, syncRevision } = offline ?? {}
   const [history, setHistory] = useState(false)
+  const [monthlyRegister, setMonthlyRegister] = useState(false)
   const [lookups, setLookups] = useState({ classes: [], years: [], terms: [] })
   const [context, setContext] = useState({ school_class: '', academic_year: '', term: '', attendance_date: schoolDate() })
   const requestVersion = useRef(0)
@@ -108,9 +109,9 @@ export default function AttendancePage() {
   async function retry(operation) { await updateOperation(operation.id, { status: 'pending', retryCount: 0, failureCategory: null, failureMessage: null }); await refresh?.(); if (isReachable) await syncNow(true) }
   async function discardToServer(operation) { await discardOperation(operation.id); await refresh?.(); await load({ discardDrafts: true }); setNotice('Local attendance change discarded. The server roster is now shown.') }
 
-  return <main className="student-page"><header className="student-page-header"><div><Link to="/school/academics" className="dashboard-link">Back to Academics</Link><h1>Attendance</h1><p>Take daily class attendance, including when connectivity is unavailable.</p></div></header>
+  return <main className="student-page"><header className="student-page-header"><div><Link to={teacher ? "/teacher" : "/school/academics"} className="dashboard-link">Back to Academics</Link><h1>Attendance</h1><p>Take daily class attendance, including when connectivity is unavailable.</p></div></header>
     <nav className="academic-filters"><button onClick={() => setHistory(false)} aria-pressed={!history}>Current Attendance</button><button onClick={() => setHistory(true)} aria-pressed={history}>Attendance History</button></nav>
-    {history ? <AttendanceHistory lookups={lookups} /> : <>
+    {history ? <><button onClick={() => setMonthlyRegister(value => !value)}>{monthlyRegister ? "Attendance History" : "Monthly Register"}</button>{monthlyRegister ? <MonthlyAttendanceRegister lookups={lookups} /> : <AttendanceHistory lookups={lookups} />}</> : <>
     {!context.school_class && <AttendanceClassList classes={lookups.classes} offline={!isReachable} onSelect={selectClass} />}
     {context.school_class && <><button type="button" onClick={() => selectClass('')}>Back to class list</button><h2>{lookups.classes.find((x) => String(x.id) === context.school_class)?.name}</h2><section className="academic-filters attendance-filters"><label>Academic Year<select value={context.academic_year} onChange={(event) => setContextField('academic_year', event.target.value)}><option value="">Choose year</option>{lookups.years.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Term<select value={context.term} onChange={(event) => setContextField('term', event.target.value)}><option value="">Choose term</option>{terms.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Date<input type="date" value={context.attendance_date} onChange={(event) => setContextField('attendance_date', event.target.value)} /></label></section></>}
     {roster && !isReachable && <p className="inventory-cache-notice">Offline — roster last synced: {new Date(roster.cachedAt).toLocaleString()}. {roster.hasLocalChanges && 'Pending attendance is included.'}</p>}

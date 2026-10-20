@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from io import BytesIO
+from io import BytesIO, StringIO
 import tempfile
 import uuid
 from zipfile import ZipFile
@@ -714,11 +714,12 @@ class TenantIsolationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         parent = Parent.objects.get(pk=response.data["id"])
         self.assertEqual(parent.school, self.school_a)
-        self.assertTrue(parent.user.check_password("Safe-pass-123!"))
+        self.assertTrue(parent.user.check_password(response.data["temporary_password"]))
+        self.assertTrue(parent.user.must_change_password)
         self.assertFalse(parent.user.password == "Safe-pass-123!")
         self.assertEqual(self.client.get(f"/api/school/parents/{self.parent_b.id}/").status_code, status.HTTP_404_NOT_FOUND)
 
-        login = self.client.post("/api/auth/token/", {"username": "new-guardian", "password": "Safe-pass-123!"}, format="json")
+        login = self.client.post("/api/auth/token/", {"username": "new-guardian", "password": response.data["temporary_password"]}, format="json")
         self.assertEqual(login.status_code, status.HTTP_200_OK)
 
     def test_parent_link_rejects_cross_school_student_and_parent_crud_roles(self):
@@ -1176,10 +1177,13 @@ class FinanceExpansionTests(APITestCase):
         self.authenticate(self.admin_a)
         pdf = self.client.get(f"/api/school/receipts/{self.receipt_a.id}/pdf/")
         self.assertEqual(pdf.status_code, status.HTTP_200_OK)
-        self.assertIn(b"School A", pdf.content)
-        self.assertIn(b"1 Alpha Road", pdf.content)
-        self.assertIn(b"a@example.test", pdf.content)
-        self.assertIn(b"PAYMENT RECEIPT", pdf.content)
+        from pypdf import PdfReader
+        from io import BytesIO
+        text = '\n'.join(page.extract_text() for page in PdfReader(BytesIO(pdf.content)).pages)
+        self.assertIn("School A", text)
+        self.assertIn("1 Alpha Road", text)
+        self.assertIn("a@example.test", text)
+        self.assertIn("PAYMENT RECEIPT", text)
         self.assertIn(b"/Subtype /Image", pdf.content)
         self.authenticate(self.parent_a_user)
         self.assertEqual(self.client.get("/api/school/expenses/").status_code, status.HTTP_403_FORBIDDEN)
@@ -1345,24 +1349,30 @@ class FinalHardeningTests(APITestCase):
         self.client.force_authenticate(user=self.parent_a_user)
         self.assertEqual(self.client.get("/api/school/audit/").status_code, status.HTTP_403_FORBIDDEN)
 
+    @override_settings(STORAGES={
+        "default": {"BACKEND": "django.core.files.storage.InMemoryStorage"},
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    })
     def test_demo_command_is_fictional_idempotent_and_reset_requires_confirmation(self):
-        call_command("create_demo_school", password="synthetic-demo-password", parent_password="synthetic-parent-password")
+        output = StringIO()
+        call_command("create_demo_school", password="synthetic-demo-password", parent_password="synthetic-parent-password", stdout=output)
+        self.assertIn("Students: 60", output.getvalue())
         demo = School.objects.get(email="demo@sunrise.invalid")
         self.assertTrue(demo.is_demo)
-        self.assertEqual(demo.students.count(), 24)
+        self.assertEqual(demo.students.count(), 60)
         self.assertTrue(demo.students.filter(first_name="Daniel", last_name="Grey").exists())
         demo_parent = Parent.objects.get(school=demo, user__username="demo.parent")
         self.assertEqual(demo_parent.student_links.count(), 2)
         self.assertTrue(demo_parent.user.check_password("synthetic-parent-password"))
         self.assertTrue(Expense.objects.filter(school=demo).count() >= 5)
-        call_command("create_demo_school", password="synthetic-demo-password", parent_password="synthetic-parent-password")
-        self.assertEqual(demo.students.count(), 24)
+        call_command("create_demo_school", password="synthetic-demo-password", parent_password="synthetic-parent-password", stdout=output)
+        self.assertEqual(demo.students.count(), 60)
         with self.assertRaises(Exception):
             call_command("reset_demo_school")
-        call_command("reset_demo_school", yes=True, password="synthetic-demo-password", parent_password="synthetic-parent-password")
+        call_command("reset_demo_school", yes=True, password="synthetic-demo-password", parent_password="synthetic-parent-password", stdout=output)
         demo.refresh_from_db()
         self.assertTrue(demo.is_demo)
-        self.assertEqual(demo.students.count(), 24)
+        self.assertEqual(demo.students.count(), 60)
         self.assertEqual(Parent.objects.get(school=demo, user__username="demo.parent").student_links.count(), 2)
 
 
@@ -1618,6 +1628,7 @@ class PlatformAdministratorTests(APITestCase):
         self.assertEqual(self.client.get("/api/school/classes/").status_code, status.HTTP_403_FORBIDDEN)
         changed = self.client.post("/api/auth/change-password/", {"current_password": temporary_password, "new_password": "Changed-pass-123!"}, format="json")
         self.assertEqual(changed.status_code, status.HTTP_200_OK, changed.data)
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + changed.data["access"])
         self.assertEqual(self.client.get("/api/school/classes/").status_code, status.HTTP_200_OK)
 
     def test_suspension_blocks_login_refresh_existing_tokens_and_reactivation_restores_access(self):

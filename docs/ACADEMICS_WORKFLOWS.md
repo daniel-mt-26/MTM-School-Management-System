@@ -107,6 +107,8 @@ static/dynamic-import chunking warning.
 
 ## Files changed for Academics
 
+The subsequent Teacher Portal batch adds assigned-class access, Draft → Submitted → Approved → Published results, controlled published corrections, report comments and monthly attendance registers. See [Teacher Portal batch report](TEACHER_PORTAL_BATCH_REPORT.md) and [future roadmap](TEACHER_PORTAL_ROADMAP.md) for current behavior and limits.
+
 Backend: `core/models.py`, `core/serializers.py`, `core/views.py`, `core/urls.py`,
 `core/academics_api.py`, `core/curriculum.py`, `core/timetables.py`,
 `core/test_academics_improvements.py` and migrations 0019/0020.
