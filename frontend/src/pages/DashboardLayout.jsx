@@ -1,15 +1,9 @@
 import { useContext } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { AuthContext } from '../auth/context'
+import AccountMenu from '../components/AccountMenu'
 
 export default function DashboardLayout({ title, description }) {
-  const { user, logout } = useContext(AuthContext)
-  const navigate = useNavigate()
-
-  const handleLogout = () => {
-    logout()
-    navigate('/login', { replace: true })
-  }
+  const { user } = useContext(AuthContext)
 
   return (
     <main className="dashboard-page">
@@ -21,7 +15,7 @@ export default function DashboardLayout({ title, description }) {
             <h1>{title}</h1>
           </div>
         </div>
-        <button type="button" className="secondary-button" onClick={handleLogout}>Log out</button>
+        <AccountMenu />
       </header>
       <section className="dashboard-card">
         <p>Signed in as {user?.first_name || user?.username}.</p>

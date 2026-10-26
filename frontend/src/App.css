@@ -78,6 +78,7 @@ button {
 }
 button:disabled { cursor: wait; opacity: 0.7; }
 .secondary-button { margin: 0; background: #fff; color: #2457a5; border: 1px solid #2457a5; }
+.account-menu { display: flex; flex: 0 0 auto; justify-content: flex-end; padding: 8px 0; }
 .form-error { margin: 0 0 12px; padding: 10px; border-radius: 6px; color: #a21717; background: #fff0f0; }
 
 .dashboard-page { padding: 40px; background: #f3f6fb; }

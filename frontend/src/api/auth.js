@@ -11,6 +11,7 @@ export const tokenStorage = {
   clear: () => {
     sessionStorage.removeItem('mtm_access_token')
     sessionStorage.removeItem('mtm_refresh_token')
+    sessionStorage.removeItem('mtm_session_account')
   },
 }
 

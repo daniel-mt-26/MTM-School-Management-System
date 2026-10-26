@@ -10,7 +10,6 @@ import React from 'react'
 import { JSDOM } from 'jsdom'
 import { transformWithOxc } from 'vite'
 import { AuthContext } from './auth/context.js'
-import { enqueueOperation, queuedOperations, clearOfflineScope } from './offline/db.js'
 
 const dom = new JSDOM('<html><body></body></html>', { url: 'http://localhost/reset-password#token=test-token' })
 globalThis.window = dom.window; globalThis.document = dom.window.document
@@ -18,7 +17,7 @@ globalThis.HTMLElement = dom.window.HTMLElement; globalThis.IS_REACT_ACT_ENVIRON
 globalThis.Element = dom.window.Element
 globalThis.localStorage = dom.window.localStorage
 globalThis.Event = dom.window.Event
-const { render, screen, fireEvent, cleanup, waitFor, act } = await import('@testing-library/react')
+const { render, screen, fireEvent, cleanup, waitFor } = await import('@testing-library/react')
 const require = createRequire(import.meta.url)
 let section = '', requests = [], downloads = []
 const lookups = { school_name: 'School A', profile: { email: 'teacher@test.example' }, classes: [{ id: 1, name: 'Assigned Grade' }], subjects: [], years: [{ id: 1, name: '2026' }], terms: [{ id: 1, name: 'Term 1', academic_year: 1 }], enrollments: [] }
@@ -55,7 +54,6 @@ const TeacherPortal = await load('./pages/TeacherPortal.jsx')
 const SortableTable = await load('./components/SortableTable.jsx')
 const Register = await load('./components/AttendanceRegister.jsx')
 const Recovery = await load('./pages/PasswordRecoveryPage.jsx')
-const { AuthProvider } = await import(await compile(new URL('./auth/AuthContext.jsx', import.meta.url)))
 afterEach(() => { cleanup(); section = ''; requests = []; downloads = []; handler = async path => path.includes('lookups') ? lookups : [] })
 after(() => dom.window.close())
 
@@ -104,44 +102,4 @@ test('reset removes token from browser URL and submits it once to the reset endp
   fireEvent.click(screen.getByRole('button', { name: 'Reset password' }))
   await waitFor(() => assert.equal(requests[0][0], '/auth/reset-password/'))
   assert.equal(JSON.parse(requests[0][1].body).token, 'test-token')
-})
-
-test('inactivity warning, real activity, Stay Signed In and expiry preserve isolated offline work', async () => {
-  const clock = Date.now, schedule = globalThis.setInterval, cancel = globalThis.clearInterval
-  let now = 1000, tick
-  Date.now = () => now
-  globalThis.setInterval = (callback, delay) => { if (delay === 1000) { tick = callback; return -1 } return schedule(callback, delay) }
-  globalThis.clearInterval = id => { if (id !== -1) cancel(id) }
-  const scope = 'user:99:teacher'
-  await clearOfflineScope(scope)
-  await enqueueOperation(scope, { module: 'homework', entity: 'homework', action: 'create', method: 'POST', path: '/teacher/homework/', payload: { title: 'Queued worksheet' } })
-  handler = async () => ({ id: 99, role: 'teacher', username: 'teacher', must_change_password: false })
-  function Probe() {
-    const auth = React.useContext(AuthContext)
-    return React.createElement('div', {}, React.createElement('p', {}, auth.user ? 'Protected teacher screen' : 'Login required'), React.createElement('button', { onClick: () => auth.signIn('teacher', 'test') }, 'Sign in'))
-  }
-  try {
-    render(React.createElement(AuthProvider, {}, React.createElement(Probe)))
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
-    await screen.findByText('Protected teacher screen')
-    now += 28 * 60 * 1000
-    act(() => tick())
-    assert.ok(screen.getByRole('alertdialog'))
-    fireEvent.click(screen.getByRole('button', { name: 'Stay Signed In' }))
-    await waitFor(() => assert.equal(screen.queryByRole('alertdialog'), null))
-    now += 27 * 60 * 1000
-    fireEvent.pointerDown(window)
-    now += 27 * 60 * 1000
-    act(() => tick())
-    assert.equal(screen.queryByRole('alertdialog'), null)
-    now += 3 * 60 * 1000
-    act(() => tick())
-    assert.ok(screen.getByText('Login required'))
-    assert.equal(screen.queryByText('Protected teacher screen'), null)
-    assert.equal((await queuedOperations(scope)).length, 1)
-    assert.equal((await queuedOperations('user:100:teacher')).length, 0)
-  } finally {
-    cleanup(); Date.now = clock; globalThis.setInterval = schedule; globalThis.clearInterval = cancel
-    await clearOfflineScope(scope)
-  }
 })

@@ -62,9 +62,11 @@ function App() {
           <Route path="/forgot-password" element={<PasswordRecoveryPage />} />
           <Route path="/reset-password" element={<PasswordRecoveryPage reset />} />
           <Route element={<ProtectedRoute allowedRole="teacher" />}><Route element={<SchoolOfflineShell />}><Route path="/teacher" element={<TeacherPortal />} /><Route path="/teacher/:section" element={<TeacherPortal />} /></Route></Route>
-          <Route path="/change-password" element={<ChangePasswordPage />} />
+          <Route element={<ProtectedRoute />}>
+            <Route path="/change-password" element={<ChangePasswordPage />} />
+            <Route path="/school-access-blocked" element={<SchoolAccessBlockedPage />} />
+          </Route>
           <Route element={<ProtectedRoute allowedRole="teacher" />}><Route path="/teacher/students/:studentId/academic-history" element={<AcademicHistoryPage teacher />} /></Route>
-          <Route path="/school-access-blocked" element={<SchoolAccessBlockedPage />} />
           <Route element={<ProtectedRoute allowedRole="platform_admin" />}>
             <Route path="/platform" element={<PlatformDashboard />} />
             <Route path="/platform/schools" element={<PlatformSchoolsPage />} />

@@ -6,17 +6,18 @@ import Attribution from '../components/Attribution'
 import SortableTable from '../components/SortableTable.jsx'
 import AttendancePage from './AttendancePage'
 import HomeworkPage from './HomeworkPage'
+import AccountMenu from '../components/AccountMenu'
 
 const sections = [['', 'Dashboard'], ['classes', 'My Classes'], ['attendance', 'Attendance'], ['homework', 'Homework'], ['results', 'Results'], ['comments', 'Report Comments'], ['timetable', 'Timetable'], ['students', 'Students'], ['announcements', 'Announcements'], ['resources', 'Resources'], ['profile', 'Profile']]
 const request = (path, data, method = 'POST') => apiClient(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
 
 export default function TeacherPortal() {
   const { section = '' } = useParams()
-  const { user, logout } = useContext(AuthContext)
+  const { user } = useContext(AuthContext)
   const [lookups, setLookups] = useState(null)
   const [error, setError] = useState('')
   useEffect(() => { let active = true; apiClient('/teacher/lookups/').then(value => { if (active) setLookups(value) }).catch(() => { if (active) setError('Connect to load teacher assignments.') }); return () => { active = false } }, [])
-  return <div className="teacher-portal"><aside className="teacher-sidebar"><h1>Teacher Portal</h1><p>{lookups?.school_name}</p><nav aria-label="Teacher navigation">{sections.map(([path, label]) => <Link key={path} aria-current={section === path ? 'page' : undefined} to={`/teacher${path ? `/${path}` : ''}`}>{label}</Link>)}</nav><button onClick={() => logout('', true)}>Log out</button><Attribution /></aside><main className="teacher-content">{error && <p role="alert">{error}</p>}{section === 'attendance' ? <AttendancePage teacher /> : section === 'homework' ? <HomeworkPage teacher /> : lookups ? <TeacherContent key={section} section={section} lookups={lookups} user={user} /> : <p>Loading assignments…</p>}</main></div>
+  return <div className="teacher-portal"><aside className="teacher-sidebar"><h1>Teacher Portal</h1><p>{lookups?.school_name}</p><nav aria-label="Teacher navigation">{sections.map(([path, label]) => <Link key={path} aria-current={section === path ? 'page' : undefined} to={`/teacher${path ? `/${path}` : ''}`}>{label}</Link>)}</nav><AccountMenu preserveOfflineWork /><Attribution /></aside><main className="teacher-content">{error && <p role="alert">{error}</p>}{section === 'attendance' ? <AttendancePage teacher /> : section === 'homework' ? <HomeworkPage teacher /> : lookups ? <TeacherContent key={section} section={section} lookups={lookups} user={user} /> : <p>Loading assignments…</p>}</main></div>
 }
 
 function TeacherContent({ section, lookups, user }) {

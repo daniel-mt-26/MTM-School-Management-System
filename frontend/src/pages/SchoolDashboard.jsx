@@ -1,7 +1,6 @@
-import { useContext, useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-
-import { AuthContext } from '../auth/context'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import AccountMenu from '../components/AccountMenu'
 import { getSchoolProfile, searchSchool } from '../api/school'
 
 const EMPTY_RESULTS = { students: [], parents: [] }
@@ -17,8 +16,6 @@ function getInitials(name) {
 }
 
 function SchoolDashboard() {
-  const { logout } = useContext(AuthContext)
-  const navigate = useNavigate()
   const [school, setSchool] = useState(null)
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
@@ -78,14 +75,10 @@ function SchoolDashboard() {
     }
   }
 
-  function handleLogout() {
-    logout()
-    navigate('/login', { replace: true })
-  }
-
   if (error) {
     return (
       <main className="school-profile-state" role="alert">
+        <AccountMenu />
         <p>{error}</p>
         <button type="button" onClick={() => window.location.reload()}>Try again</button>
       </main>
@@ -93,7 +86,7 @@ function SchoolDashboard() {
   }
 
   if (!school) {
-    return <main className="school-profile-state" aria-live="polite">Loading school profile…</main>
+    return <main className="school-profile-state" aria-live="polite"><AccountMenu />Loading school profile…</main>
   }
 
   return (
@@ -111,7 +104,7 @@ function SchoolDashboard() {
             <p>School Management System</p>
           </div>
         </div>
-        <button type="button" className="school-logout secondary-button" onClick={handleLogout}>Log out</button>
+        <AccountMenu />
       </header>
 
       <main className="dashboard-content">
